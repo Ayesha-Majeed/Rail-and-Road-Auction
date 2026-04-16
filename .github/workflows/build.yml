@@ -1,0 +1,33 @@
+name: Build Windows EXE
+on:
+  push:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      # Path changed to DesktopApp/
+      run: pip install -r DesktopApp/requirements.txt pyinstaller
+    
+    - name: Create default config
+      # Config path aligned to DesktopApp/
+      run: |
+        echo '{"folder_path":"","books_path":"","slides_path":"","mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
+    
+    - name: Build EXE
+      run: pyinstaller --onefile --windowed --name "BookSync" --add-data "DesktopApp/olive_high.json;." --add-data "DesktopApp/icons;icons" --add-data "DesktopApp/sync_config.json;." DesktopApp/sync_app_clr_trae.py
+    
+    - name: Upload EXE
+      uses: actions/upload-artifact@v4
+      with:
+        name: BookSync-Windows-Portable
+        path: dist/BookSync.exe
+        retention-days: 3 
