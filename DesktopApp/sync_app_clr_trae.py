@@ -1005,7 +1005,7 @@ class SyncApp(ctk.CTk):
 
         # Demo rows removed; rows will appear during sync
 
-    def _add_activity_row(self, book_id, status, type_, timestamp):
+    def _add_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
         """Add a new row to the activity table — optimized for performance."""
         bg, fg = STATUS_STYLES.get(status, (C["s_o_bg"], C["s_o_fg"]))
 
@@ -1062,9 +1062,25 @@ class SyncApp(ctk.CTk):
                 _bind_mouse_wheel(child)
         _bind_mouse_wheel(row)
 
+        # Store error message in row metadata
+        self.activity_rows[book_id] = {
+            "row": row, "badge": badge, "type_lbl": type_lbl, 
+            "time_lbl": time_lbl, "error_msg": error_msg
+        }
+        self.row_order.append(book_id)
+
         def _open_detail(_e=None):
             # Check current status from badge
             current_status = badge.cget("text")
+            
+            if current_status == "Failed":
+                stored_err = self.activity_rows[book_id].get("error_msg")
+                if stored_err:
+                    messagebox.showerror("Processing Failed", f"Book {book_id} failed.\n\nReason: {stored_err}")
+                else:
+                    messagebox.showinfo("Failed", f"Book {book_id} failed to produce metadata. Check the logs for details.")
+                return
+
             if current_status not in ["Complete", "Skipped"]:
                 self._log(f"ℹ️ Detail view unavailable: {book_id} is {current_status}")
                 return
@@ -1713,7 +1729,7 @@ class SyncApp(ctk.CTk):
                     title_lbl = ctk.CTkLabel(title_body, text=ai_title,
                                  font=ctk.CTkFont(family="Outfit", size=32, weight="bold"),
                                  text_color="#0F172A", anchor="w",
-                                 justify="left", wraplength=420
+                                 justify="left"
                                  )
                     title_lbl.pack(anchor="w", fill="x")
 
@@ -1723,7 +1739,7 @@ class SyncApp(ctk.CTk):
                         subtitle_lbl = ctk.CTkLabel(title_body, text=ai_subtitle,
                                      font=ctk.CTkFont(family="Inter", size=24, weight="normal"),
                                      text_color="#475569", anchor="w",
-                                     justify="left", wraplength=420
+                                     justify="left"
                                      )
                         subtitle_lbl.pack(anchor="w", fill="x", pady=(8, 0))
 
@@ -1763,10 +1779,10 @@ class SyncApp(ctk.CTk):
                     description_val = doc.get("description", "") or "(Not Found)"
                     desc_lbl = ctk.CTkLabel(desc_card, text=description_val,
                                  font=ctk.CTkFont(family="Inter", size=22),
-                                 text_color="#000000", anchor="w",
-                                 justify="left", wraplength=420
+                                 text_color="#000000", anchor="nw",
+                                 justify="left"
                                  )
-                    desc_lbl.pack(anchor="w", padx=24, pady=24, fill="x")
+                    desc_lbl.pack(anchor="nw", padx=24, pady=24, fill="both", expand=True)
                     desc_card.bind("<Configure>", lambda e, l=desc_lbl: _on_label_resize(e, l, 64), add="+")
 
                     def _refresh_ai_wrap(_e=None):
@@ -2164,7 +2180,7 @@ class SyncApp(ctk.CTk):
         self.row_order.append(book_id)
         return widgets
 
-    def update_activity_row(self, book_id, status, type_, timestamp):
+    def update_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
         """Update existing row or create new one. Called from main thread via after()."""
         if not book_id: return
         
@@ -2175,10 +2191,12 @@ class SyncApp(ctk.CTk):
             w["badge"].configure(text=status, fg_color=bg, text_color=fg)
             w["time_lbl"].configure(text=timestamp)
             w["type_lbl"].configure(text=type_)
+            if error_msg:
+                w["error_msg"] = error_msg
         elif book_id not in self._pending_ids:
             # Mark as pending to prevent duplicate rows from rapid updates
             self._pending_ids.add(book_id)
-            self._add_activity_row(book_id, status, type_, timestamp)
+            self._add_activity_row(book_id, status, type_, timestamp, error_msg=error_msg)
             # Remove from pending after creation (it's now in activity_rows)
             self._pending_ids.discard(book_id)
 
@@ -2821,6 +2839,7 @@ class SyncApp(ctk.CTk):
 
                         # ── OCR Pipeline ──────────────────────────────────
                         ai_result = None
+                        last_error = None
                         if OCR_AVAILABLE:
                             try:
                                 ai_result = self._process_book_ocr(
@@ -2836,9 +2855,11 @@ class SyncApp(ctk.CTk):
                                     self._log(f"  🎉 AI done: {book_id}")
                                 else:
                                     doc["ocr_completed"] = False
+                                    last_error = "OCR/AI process failed to extract metadata. Check app logs."
                                     self._log(f"  ⚠️ OCR returned no results for {book_id}")
                             except Exception as e:
                                 doc["ocr_completed"] = False
+                                last_error = str(e)
                                 self._log(f"  ⚠️ OCR pipeline error: {e}")
                         else:
                             self._log(f"  ❌ ERROR: OCR pipeline not available (models missing). Skipping book.")
@@ -2869,15 +2890,15 @@ class SyncApp(ctk.CTk):
                             except Exception as e:
                                 self._log(f"  ❌ DB Error: {e}")
                                 self.total_fail += 1
-                                self.after(0, lambda b=book_id, t=ts:
-                                           self.update_activity_row(b, "Failed", "DB Error", t))
+                                self.after(0, lambda b=book_id, t=ts, err=str(e):
+                                           self.update_activity_row(b, "Failed", "DB Error", t, error_msg=err))
                                 continue
                         else:
                             # If we reached here without ai_result, skip sync
                             self._log(f"  ⚠️ Skipping sync for {book_id} (No metadata extracted)")
                             self.total_fail += 1
-                            self.after(0, lambda b=book_id, t=ts:
-                                       self.update_activity_row(b, "Failed", "No Metadata", t))
+                            self.after(0, lambda b=book_id, t=ts, err=last_error:
+                                       self.update_activity_row(b, "Failed", "No Metadata", t, error_msg=err))
                             continue
 
                         self.after(0, self.update)
