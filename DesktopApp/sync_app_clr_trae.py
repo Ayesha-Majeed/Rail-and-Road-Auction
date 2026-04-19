@@ -2612,12 +2612,10 @@ class SyncApp(ctk.CTk):
             try:
                 pages = ocr_pipeline.crop_book(images_to_process, book_crops_folder)
             except Exception as e:
-                self._log(f"  ❌ Crop failed: {e}")
-                return None
+                raise RuntimeError(f"YOLO Cropping failed: {e}")
             
             if not pages:
-                self._log(f"  ⚠️ No crops for {book_id}")
-                return None
+                raise RuntimeError("No book content identified by YOLO. Try clearer cover photos.")
             
             self._log(f"  ✅ {len(pages)} page(s) cropped")
 
@@ -2645,8 +2643,10 @@ class SyncApp(ctk.CTk):
                     
                     if ocr_data:
                         interior_text = "\n".join(ocr_data.get("interior_texts", []))
+                    else:
+                        raise RuntimeError("OCR returned empty result (check if EasyOCR models are missing/corrupt).")
                 except Exception as e:
-                    self._log(f"  ❌ OCR failed: {e}")
+                    raise RuntimeError(f"OCR Phase failed: {e}")
             else:
                 self._log(f"  ⏭️ Skipping MinerU OCR (Description found via ISBN)")
 
