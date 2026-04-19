@@ -10,38 +10,33 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up Python
+    
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller customtkinter pillow requests ollama python-dotenv
-        # Add your specific extra requirements here if any
-
-    - name: Create Default Config
+        # Requirements DesktopApp se install hongi
+        pip install -r DesktopApp/requirements.txt pyinstaller
+    
+    - name: Create default config
       run: |
-        echo '{
-          "mongo_uri": "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test",
-          "db_name": "Test",
-          "collection": "Book Data",
-          "watch_mode": false,
-          "interval": 30
-        }' > backend_integration/sync_config.json
-
-    - name: Build with PyInstaller
+        # Config file DesktopApp ke andar generate hogi
+        echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
+    
+    - name: Build EXE
       run: |
-        pyinstaller --noconfirm --onedir --windowed `
-        --add-data "backend_integration/sync_config.json;." `
-        --add-data "backend_integration/icons;icons" `
-        --name "BookSync" `
-        backend_integration/sync_app_clr_trae.py
-
+        # PyInstaller DesktopApp ke andar se script aur data uthaye ga
+        pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
+        --add-data "DesktopApp/icons;icons" `
+        --add-data "DesktopApp/sync_config.json;." `
+        DesktopApp/sync_app_clr_trae.py
+    
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v4  # Fixed deprecation error
       with:
-        name: BookSync-Portable
+        name: BookSync-Windows-Portable
         path: dist/BookSync/
