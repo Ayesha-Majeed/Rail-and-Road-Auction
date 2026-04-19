@@ -687,13 +687,18 @@ class SyncApp(ctk.CTk):
         def _run():
             try:
                 ok, final_msg = model_manager.ensure_models(progress_callback=_update_ui)
-                if ok:
-                    messagebox.showinfo("Success", "All models are ready!")
-                else:
-                    messagebox.showerror("Error", f"Failed to setup models:\n{final_msg}")
-            finally:
+                # Close the progress window FIRST
                 try: win.destroy()
                 except Exception: pass
+                
+                if ok:
+                    messagebox.showinfo("Success", "YOLO weights and AI models successfully downloaded!")
+                else:
+                    messagebox.showerror("Error", f"Failed to setup models:\n{final_msg}")
+            except Exception as e:
+                try: win.destroy()
+                except: pass
+                print(f"Downloader error: {e}")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -2353,13 +2358,16 @@ class SyncApp(ctk.CTk):
                                  "Please paste your connection token.")
             return
 
-        uri = self.config.get("mongo_uri", "").strip()
-        if not uri:
-            env_uri = os.environ.get("MONGO_URI", "").strip()
-            if env_uri:
-                uri = env_uri
-                self.config["mongo_uri"] = env_uri
-                self._save_config()
+        # Configuration Priority: OS Env (including .env) > JSON Config > Hardcoded Fallback
+        uri = (os.environ.get("MONGO_URI") or 
+               self.config.get("mongo_uri") or 
+               "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test").strip()
+        
+        # Save used URI to config if it's not already there
+        if uri and not self.config.get("mongo_uri"):
+            self.config["mongo_uri"] = uri
+            self._save_config()
+        
         if not uri:
             messagebox.showerror("Missing Database URI",
                                  "Database connection is not configured.")
