@@ -13,3 +13,5 @@ magic-pdf[full]
 #I8Ajt5tPg1QeB2GR.3Nf-O7jJkawoqYfF3psGRg.qOFjFKahdBkwUB8QoxvHqtTh2QmIFLgvjjYc8M1R991mKJM9f5sIMoxuMA
 #70LGKc4SojvP8tcHO521MgeoY4PaTj2m_MI0HZDCV1Q
 #api_key= AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0
+easyocr
+# NOTE: Do NOT remove easyocr from this list. It is required for the OCR pipeline.
