@@ -925,30 +925,47 @@ def save_book_metadata(book_id, title, description, output_folder, edition="", a
 
 
 def stop_ollama():
-    """Aggressively stops Ollama and unloads all models to free VRAM."""
+    """Aggressively stops Ollama and unloads all models to free VRAM (Cross-platform)."""
     import requests as _req
     import time
+    import platform
     
-    # 1. API Unload (multiple retries)
-    for _ in range(3):
-        try:
-            ps = _req.get("http://localhost:11434/api/ps", timeout=2)
-            if ps.status_code == 200:
-                models = ps.json().get("models", [])
-                if not models: break
-                for m in models:
-                    _req.post("http://localhost:11434/api/generate", json={"model": m.get("name"), "keep_alive": 0}, timeout=2)
-                time.sleep(1)
-        except: break
+    # 1. API Unload (Standard way to free VRAM)
+    try:
+        ps = _req.get("http://localhost:11434/api/ps", timeout=2)
+        if ps.status_code == 200:
+            models = ps.json().get("models", [])
+            for m in models:
+                try:
+                    # Setting keep_alive=0 tells Ollama to unload the model immediately
+                    _req.post("http://localhost:11434/api/generate", 
+                             json={"model": m.get("name"), "keep_alive": 0}, timeout=1)
+                except: continue
+            time.sleep(0.5)
+    except: pass
 
-    # 2. System-Level Kill (Targeting the actual GPU runner)
-    os.system("pkill -9 -f 'ollama_llama_server' 2>/dev/null || true")
-    os.system("pkill -9 -f 'ollama_llama_server' 2>/dev/null || true")
-    os.system("pkill -9 -f 'ollama' 2>/dev/null || true")
-    time.sleep(1.5)
+    # 2. System-Level Kill (Fallback for extreme memory pressure)
+    try:
+        if platform.system() == "Windows":
+            # Using taskkill /F to force stop blocking processes
+            os.system("taskkill /F /IM ollama_llama_server.exe /T 2>nul >nul")
+            os.system("taskkill /F /IM ollama.exe /T 2>nul >nul")
+        else:
+            os.system("pkill -9 -f 'ollama_llama_server' 2>/dev/null || true")
+            os.system("pkill -9 -f 'ollama' 2>/dev/null || true")
+    except: pass
     
-    # 3. Final CUDA Flush
+    time.sleep(1.0)
     cleanup_gpu()
+
+def cleanup_gpu():
+    """Forces garbage collection and flushes CUDA cache."""
+    import gc
+    import torch
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 def start_ollama():
     """Starts the Ollama server in the background (if not already running)."""
