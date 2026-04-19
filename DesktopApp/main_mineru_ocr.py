@@ -105,7 +105,13 @@ def unload_easyocr():
 # LOGGING
 # ════════════════════════════════════════════════════
 
+# ─── Global Log Redirector ───
+LOG_CALLBACK = None
+
 def log(msg: str = ""):
+    if LOG_CALLBACK:
+        try: LOG_CALLBACK(msg)
+        except: pass
     print(msg, flush=True)
 
 def log_step(title: str):
@@ -119,16 +125,30 @@ def log_part(title: str):
     log(f"  ── {title} {'─' * max(1, 54 - len(title))}")
 
 def log_progress(msg: str):
+    # For UI, we don't want the trailing '...', we want a clean message
+    if LOG_CALLBACK:
+        try: LOG_CALLBACK(f"  ⏳ {msg}")
+        except: pass
     print(f"  ⏳ {msg} ...", end=" ", flush=True)
 
 def log_done(extra: str = ""):
+    if LOG_CALLBACK:
+        try: LOG_CALLBACK(f"    ✓ {extra}")
+        except: pass
     print(f"✓  {extra}", flush=True)
 
 def log_fail(reason: str = ""):
+    if LOG_CALLBACK:
+        try: LOG_CALLBACK(f"    ✗ {reason}")
+        except: pass
     print(f"✗  {reason}", flush=True)
 
 def log_info(key: str, value: str):
-    print(f"  {key:<20}: {value}", flush=True)
+    msg = f"  {key:<20}: {value}"
+    if LOG_CALLBACK:
+        try: LOG_CALLBACK(msg)
+        except: pass
+    print(msg, flush=True)
 
 def log_warn(msg: str):
     log(f"  ⚠️  {msg}")
@@ -238,9 +258,17 @@ def crop_book(book_images: list, book_crops_folder: str) -> dict:
                     pages[page_id].append((c["col_name"], c["crop_path"]))
                     log_info(f"    {c['col_name']}", f"{c['width']}x{c['height']}px → {Path(c['crop_path']).name}")
             else:
-                log_fail("no crops")
+                # FALLBACK: If YOLO finds nothing, don't fail! Use the full image as C1
+                log(f"  ⚠️  No columns detected by YOLO. Falling back to full image.")
+                dest_path = os.path.join(book_crops_folder, f"{page_id}_C1.jpg")
+                shutil.copy2(img_path, dest_path)
+                pages[page_id].append(("C1", dest_path))
+                log_done("full image used as fallback")
         except Exception as e:
-            log_fail(str(e))
+            log_fail(f"YOLO engine error: {e}. Falling back to full image.")
+            dest_path = os.path.join(book_crops_folder, f"{page_id}_C1.jpg")
+            shutil.copy2(img_path, dest_path)
+            pages[page_id].append(("C1", dest_path))
 
     for page_id in pages:
         pages[page_id] = sorted(pages[page_id], key=lambda x: x[0])

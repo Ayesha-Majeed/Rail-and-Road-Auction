@@ -338,6 +338,13 @@ class SyncApp(ctk.CTk):
         # Bind resize to update padding AND fonts
         self.bind("<Configure>", self._on_resize)
 
+        # Connect ocr_pipeline logs to our UI activity log
+        try:
+            import main_mineru_ocr as ocr_pipeline
+            ocr_pipeline.LOG_CALLBACK = self._log
+        except Exception as e:
+            self._log(f"⚠️ Could not hook OCR logs: {e}")
+
     def _get_os_scale(self):
         """
         Detect the OS-level display scale factor on Linux/Ubuntu.
@@ -768,10 +775,6 @@ class SyncApp(ctk.CTk):
         # ── Recent Activity ───────────────────────────────────────────────────
         self._build_activity_section()
 
-        # NOTE: Hidden log box removed as it was causing UI glitches and hang-ups
-        # specifically on Linux/Ubuntu when updated rapidly at height=0.
-        self.log_box = None
-
     # ── Token Card ─────────────────────────────────────────────────────────────
     def _build_token_card(self, parent):
         card = ctk.CTkFrame(parent, corner_radius=self._px(10),
@@ -1004,6 +1007,54 @@ class SyncApp(ctk.CTk):
         self.rows_container.grid_columnconfigure(3, weight=2, uniform="rc")
 
         # Demo rows removed; rows will appear during sync
+        
+        # ── Live Pipeline Log (Toggleable) ──────────
+        ctk.CTkFrame(self.act_frame, height=1, fg_color=C["border"]).pack(fill="x", padx=20, pady=(12, 0))
+        
+        log_header = ctk.CTkFrame(self.act_frame, fg_color="transparent")
+        log_header.pack(fill="x", padx=20, pady=8)
+        
+        self._reg(ctk.CTkLabel(log_header, text="Live Pipeline Logs",
+                     font=ctk.CTkFont(family="Outfit", size=self.F["table_h"], weight="bold"),
+                     text_color=C["muted"]), 13, "Outfit", "bold").pack(side="left")
+        
+        self.log_toggle_btn = ctk.CTkButton(log_header, text="Show Logs", width=80, height=24,
+                                            corner_radius=6, border_width=1, border_color=C["border"],
+                                            fg_color="transparent", text_color=C["muted"],
+                                            font=ctk.CTkFont(size=self.F["muted"]),
+                                            hover_color="#F5F5F5",
+                                            command=self._toggle_log_box)
+        self.log_toggle_btn.pack(side="right")
+
+        self.log_box_container = ctk.CTkFrame(self.act_frame, fg_color="#F9FAFB", height=0)
+        self.log_box_container.pack(fill="x", padx=20, pady=(0, 16))
+        self.log_box_container.pack_propagate(False)
+
+        # Standard Text widget for absolute reliability across platforms
+        from tkinter import Text, Scrollbar
+        self.log_scroll = Scrollbar(self.log_box_container)
+        self.log_scroll.pack(side="right", fill="y")
+        
+        self.log_box = Text(self.log_box_container, 
+                            bg="#FFFFFF", fg="#1E3A8A", # Deep blue on white for maximum contrast
+                            font=("Monospace", 10),
+                            borderwidth=0, highlightthickness=0,
+                            yscrollcommand=self.log_scroll.set)
+        self.log_box.pack(fill="both", expand=True, padx=8, pady=8)
+        self.log_scroll.config(command=self.log_box.yview)
+        
+        self.log_box.configure(state="disabled")
+        self.log_visible = False
+
+    def _toggle_log_box(self):
+        if self.log_visible:
+            self.log_box_container.configure(height=0)
+            self.log_toggle_btn.configure(text="Show Logs")
+            self.log_visible = False
+        else:
+            self.log_box_container.configure(height=250)
+            self.log_toggle_btn.configure(text="Hide Logs")
+            self.log_visible = True
 
     def _add_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
         """Add a new row to the activity table — optimized for performance."""
@@ -2936,9 +2987,12 @@ class SyncApp(ctk.CTk):
             count += 1
         
         if batch:
-            # We skip internal log box insertion to prevent UI lag on Ubuntu
-            # The log_queue is still useful for debugging if needed later.
-            pass
+            if self.log_box and self.log_box.winfo_exists():
+                self.log_box.configure(state="normal")
+                self.log_box.insert("end", batch)
+                self.log_box.configure(state="disabled")
+                if self.log_visible:
+                    self.log_box.see("end")
         self.after(200, self._poll_log)
 
 
