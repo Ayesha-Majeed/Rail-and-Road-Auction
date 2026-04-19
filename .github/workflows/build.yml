@@ -14,29 +14,39 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
+        python-version: '3.11'  # 3.11 is slightly more stable for some AI libs on Windows
     
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Requirements DesktopApp se install hongi
         pip install -r DesktopApp/requirements.txt pyinstaller
     
     - name: Create default config
       run: |
-        # Config file DesktopApp ke andar generate hogi
         echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
     
     - name: Build EXE
+      # --onedir is MUCh faster and more stable for large AI libraries
+      # --collect-all ensures complex libs like magic-pdf/easyocr are fully bundled
+      # We explicitly include all local script dependencies
       run: |
-        # PyInstaller DesktopApp ke andar se script aur data uthaye ga
         pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
         --add-data "DesktopApp/icons;icons" `
+        --add-data "DesktopApp/olive_high.json;." `
         --add-data "DesktopApp/sync_config.json;." `
+        --add-data "DesktopApp/main_mineru_ocr.py;." `
+        --add-data "DesktopApp/model_manager.py;." `
+        --add-data "DesktopApp/column_cropper.py;." `
+        --add-data "DesktopApp/mineru_without_preprocessing_old.py;." `
+        --add-data "DesktopApp/isbn_extractor_ui.py;." `
+        --collect-all magic-pdf `
+        --collect-all easyocr `
+        --collect-all doclayout-yolo `
         DesktopApp/sync_app_clr_trae.py
     
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4  # Fixed deprecation error
+      uses: actions/upload-artifact@v4
       with:
         name: BookSync-Windows-Portable
         path: dist/BookSync/
+        retention-days: 3
