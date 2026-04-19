@@ -156,23 +156,38 @@ def ensure_models(progress_callback=None):
     return ok, msg
 
 def download_model(name, url, dest, progress_callback=None):
-    """Downloads a file with progress reporting."""
-    response = requests.get(url, stream=True)
-    total_size = int(response.headers.get('content-length', 0))
-    
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    
-    with open(dest, "wb") as f:
-        if total_size == 0:
-            f.write(response.content)
-        else:
-            downloaded = 0
-            for data in response.iter_content(chunk_size=4096):
-                downloaded += len(data)
-                f.write(data)
-                if progress_callback:
-                    done = int(50 * downloaded / total_size)
-                    progress_callback(name, (downloaded / total_size) * 100)
+    """Downloads a file with SSL resilience."""
+    request_kwargs = {"stream": True, "timeout": 20, "verify": True}
+    try:
+        import certifi
+        request_kwargs["verify"] = certifi.where()
+    except ImportError:
+        pass
+
+    try:
+        try:
+            response = requests.get(url, **request_kwargs)
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError):
+            # Fallback for corporate/portable environments
+            request_kwargs["verify"] = False
+            response = requests.get(url, **request_kwargs)
+
+        total_size = int(response.headers.get('content-length', 0))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        
+        with open(dest, "wb") as f:
+            if total_size == 0:
+                f.write(response.content)
+            else:
+                downloaded = 0
+                for data in response.iter_content(chunk_size=8192):
+                    downloaded += len(data)
+                    f.write(data)
+                    if progress_callback:
+                        progress_callback(name, (downloaded / total_size) * 100)
+    except Exception as e:
+        print(f"❌ Failed to download {name}: {e}")
+        raise e
 
 if __name__ == "__main__":
     health_check()

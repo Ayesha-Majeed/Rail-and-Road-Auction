@@ -1036,7 +1036,7 @@ class SyncApp(ctk.CTk):
         self.log_scroll.pack(side="right", fill="y")
         
         self.log_box = Text(self.log_box_container, 
-                            bg="#FFFFFF", fg="#1E3A8A", # Deep blue on white for maximum contrast
+                            bg="#FFFBEB", fg="#000000", # High visibility yellow
                             font=("Monospace", 10),
                             borderwidth=0, highlightthickness=0,
                             yscrollcommand=self.log_scroll.set)
@@ -2987,13 +2987,17 @@ class SyncApp(ctk.CTk):
             count += 1
         
         if batch:
-            if self.log_box and self.log_box.winfo_exists():
-                self.log_box.configure(state="normal")
-                self.log_box.insert("end", batch)
-                self.log_box.configure(state="disabled")
-                if self.log_visible:
-                    self.log_box.see("end")
-        self.after(200, self._poll_log)
+            if self.log_box and hasattr(self.log_box, "winfo_exists") and self.log_box.winfo_exists():
+                try:
+                    self.log_box.configure(state="normal")
+                    self.log_box.insert("end", batch)
+                    self.log_box.see("end") # Force scroll to bottom for real-time tracking
+                    self.log_box.configure(state="disabled")
+                    self.update_idletasks() # Force UI refresh
+                except Exception as e:
+                    print(f"DEBUG: Log box insert failed: {e}")
+        
+        self.after(150, self._poll_log) # Faster polling
 
 
 # ─── Entry ────────────────────────────────────────────────────────────────────

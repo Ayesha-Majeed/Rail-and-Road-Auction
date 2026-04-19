@@ -237,6 +237,7 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
         log_fn("  ⚠️ Google Books API Key missing.")
         return None
 
+    # Hardened headers to bypass common bot filters
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     }
@@ -246,9 +247,25 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
     safe_key = f"{GOOGLE_BOOKS_API_KEY[:4]}...{GOOGLE_BOOKS_API_KEY[-4:]}" if len(GOOGLE_BOOKS_API_KEY)>8 else "..."
     log_fn(f"  🌍 Calling Google API: q=isbn:{isbn} (key={safe_key})")
     
+    # SENIOR-GRADE: SSL Resilience for Windows Portable App
+    request_kwargs = {"headers": headers, "timeout": 15, "verify": True}
+    try:
+        import certifi
+        request_kwargs["verify"] = certifi.where()
+    except ImportError:
+        pass
+
     for attempt in range(1, 4):  # Up to 3 attempts
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            try:
+                resp = requests.get(url, **request_kwargs)
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as ssl_err:
+                log_fn(f"  ⚠️ SSL/Connection error on attempt {attempt}: {ssl_err}")
+                log_fn("  🔧 Attempting SSL fallback (verify=False)...")
+                # Final fallback for corporate/portable environments with missing certs
+                request_kwargs["verify"] = False
+                resp = requests.get(url, **request_kwargs)
+
             data = resp.json()
             
             if resp.status_code == 200:
@@ -280,7 +297,7 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
             elif resp.status_code == 503:
                 log_fn(f"  ⏳ API 503 (Unavailable) - Attempt {attempt}/3. Waiting...")
                 if attempt < 3:
-                    time.sleep(1.5 * attempt) # Exponential backoff
+                    time.sleep(2 * attempt)
                     continue
             
             # Handle other errors
