@@ -18,12 +18,18 @@ load_dotenv()
 # ─── OCR Pipeline (same folder) ──────────────────────────────────────────────
 import model_manager
 
+OCR_IMPORT_ERROR = None
 try:
     import main_mineru_ocr as ocr_pipeline
     OCR_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     OCR_AVAILABLE = False
-    print("⚠️  main_mineru_ocr not found — OCR pipeline disabled")
+    OCR_IMPORT_ERROR = str(e)
+    print(f"⚠️  main_mineru_ocr not found or dependency error: {e}")
+except Exception as e:
+    OCR_AVAILABLE = False
+    OCR_IMPORT_ERROR = str(e)
+    print(f"⚠️  Unexpected error loading OCR pipeline: {e}")
 
 try:
     import isbn_extractor_ui as isbn_logic
@@ -2444,9 +2450,10 @@ class SyncApp(ctk.CTk):
 
         # USER REQUEST: Explicit check for Models / OCR
         if not OCR_AVAILABLE:
+            error_details = f"\nDetails: {OCR_IMPORT_ERROR}" if OCR_IMPORT_ERROR else ""
             messagebox.showwarning("Models Missing", 
                 "OCR Pipeline (main_mineru_ocr.py) or dependencies are missing.\n"
-                "Syncing is disabled until models are installed.")
+                f"Syncing is disabled until models are installed.{error_details}")
             return
             
         # Check if Ollama is running (simple check)
