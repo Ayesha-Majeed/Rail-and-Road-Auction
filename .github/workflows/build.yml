@@ -9,10 +9,10 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
@@ -20,7 +20,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller customtkinter pillow requests ollama python-dotenv
-        # Add other dependencies from your requirements.txt
+        # Add your specific extra requirements here if any
 
     - name: Create Default Config
       run: |
@@ -41,7 +41,7 @@ jobs:
         backend_integration/sync_app_clr_trae.py
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: BookSync-Portable
         path: dist/BookSync/
