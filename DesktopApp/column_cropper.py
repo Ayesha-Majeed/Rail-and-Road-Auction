@@ -718,18 +718,15 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    print("❌ python-dotenv not found. Run: pip install python-dotenv")
-    sys.exit(1)
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
-# ─── CONFIG ───────────────────────────────────
-import model_manager
-model_manager.setup_portable_paths()
+BASE_DIR      = get_app_dir()
+# ─── Load Environment ────────────────────────────────────────────────────────
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 IMAGE_FOLDER  = os.getenv("IMAGE_FOLDER",  os.path.join(BASE_DIR, "failed_cases"))
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", os.path.join(BASE_DIR, "ocr_results"))
 CROPS_FOLDER  = os.path.join(OUTPUT_FOLDER, "column_crops")

@@ -38,6 +38,24 @@ except ImportError:
     ISBN_LOGIC_AVAILABLE = False
     print("⚠️  isbn_extractor_ui not found — ISBN first-pass disabled")
 
+# Determined if running as a PyInstaller bundle
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_app_dir()
+# ─── Load Environment ────────────────────────────────────────────────────────
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+# ─── Assets/Icons Pathing ───────────────────────────────────────────────────────
+# For icons/resources, we use __file__ because they are usually BUNDLED INSIDE the EXE
+INTERNAL_BASE = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(INTERNAL_BASE, "icons")
+if not os.path.exists(ASSETS_DIR):
+    # Fallback to BASE_DIR if not found internal (for dev mode)
+    ASSETS_DIR = os.path.join(BASE_DIR, "icons")
+
 # ─── Theme ────────────────────────────────────────────────────────────────────
 ctk.set_appearance_mode("light")
 

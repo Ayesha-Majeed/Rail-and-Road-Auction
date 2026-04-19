@@ -15,12 +15,25 @@ import torch
 from PIL import Image
 
 # ─── Load Environment ────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_app_dir()
+env_path = os.path.join(BASE_DIR, ".env")
+load_dotenv(env_path)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 VISION_MODEL   = os.getenv("VISION_MODEL", "minicpm-v:latest")
 GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY", "")
+
+def check_env_loaded(log_fn=print):
+    """Log the environment status for debugging."""
+    if not GOOGLE_BOOKS_API_KEY:
+        log_fn(f"  ⚠️ Google Books API Key missing. (Searched: {env_path})")
+    else:
+        log_fn(f"  ✅ Environment loaded from: {BASE_DIR}")
 
 # ─── Lazy EasyOCR Engine (CPU-only to avoid VRAM contention) ─────────────────
 _ocr_reader = None
@@ -342,6 +355,10 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
     """
     log_fn("-" * 60)
     log_fn(f"📚 PROCESSING BOOK: {book_id}")
+    
+    # SENIOR-GRADE: Log where we are loading keys from
+    check_env_loaded(log_fn)
+    
     log_fn(f"📄 Found {len(files)} files.")
 
     # Sort files by page number suffix (e.g., _01.jpg, -04.png)
