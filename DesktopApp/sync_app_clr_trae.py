@@ -301,13 +301,7 @@ class SyncApp(ctk.CTk):
         self.minsize(800, 560)
 
         # ─── Model Health Check ────────────────────
-        ok, msg = model_manager.health_check()
-        if not ok:
-            messagebox.showwarning("AI Models Missing/Error", 
-                                 f"Some components are not ready:\n\n{msg}\n\n"
-                                 "You can still use the app, but OCR features might fail.")
-        else:
-            print(f"✅ {msg}")
+        self.after(100, self._check_models_on_start)
 
         # Store screen info for responsive scaling
         self._win_w = w
@@ -565,7 +559,16 @@ class SyncApp(ctk.CTk):
                       text_color=C["muted"],
                       hover_color="#F5F5F5",
                       font=ctk.CTkFont(size=self.F["heading"]),
-                      command=self._open_settings), 16, "Inter", "normal").pack(side="left")
+                      command=self._open_settings), 16, "Inter", "normal").pack(side="left", padx=(0, 8))
+
+        self._reg(ctk.CTkButton(right, text="↻", width=self._px(36), height=self._px(36),
+                      corner_radius=self._px(18),
+                      fg_color="transparent",
+                      border_width=1, border_color=C["border"],
+                      text_color=C["muted"],
+                      hover_color="#F5F5F5",
+                      font=ctk.CTkFont(size=self.F["heading"]),
+                      command=self._check_models_manual), 16, "Inter", "normal").pack(side="left")
 
     def _set_conn_visual(self, state):
         try:
@@ -614,6 +617,85 @@ class SyncApp(ctk.CTk):
                 self.conn_icon.configure(image=self._conn_icon_red, text="")
             else:
                 self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"]) 
+
+    def _check_models_on_start(self):
+        ok, msg, missing = model_manager.health_check()
+        if not ok:
+            if any(m == "yolo" or m.startswith("ollama:") for m in missing):
+                ans = messagebox.askyesno("AI Models Missing", 
+                                        f"Some AI models are missing:\n\n{msg}\n\n"
+                                        "Would you like to download/pull them now?")
+                if ans:
+                    self._show_model_downloader()
+            else:
+                messagebox.showwarning("AI Service Error", msg)
+        else:
+            print(f"✅ {msg}")
+
+    def _check_models_manual(self):
+        self._set_conn_visual("connecting")
+        ok, msg, missing = model_manager.health_check()
+        if ok:
+            messagebox.showinfo("Health Check", "All systems active!")
+            self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "neutral")
+        else:
+            ans = messagebox.askyesno("Health Check Result", f"Issues found:\n\n{msg}\n\nTry to fix/download?")
+            if ans:
+                self._show_model_downloader()
+            else:
+                self._set_conn_visual("failed")
+    
+    def _show_model_downloader(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Download Status")
+        w_px, h_px = self._px(550), self._px(220)
+        win.geometry(f"{w_px}x{h_px}")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.configure(fg_color=C["bg"])
+        
+        # Center on parent
+        self.update_idletasks()
+        px, py = self.winfo_x(), self.winfo_y()
+        pw, ph = self.winfo_width(), self.winfo_height()
+        win.geometry(f"+{px + (pw - w_px)//2}+{py + (ph - h_px)//2}")
+
+        lbl = ctk.CTkLabel(win, text="Preparing models...", 
+                           font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
+                           text_color=C["text"])
+        lbl.pack(pady=(self._px(40), self._px(20)))
+        
+        prog = ctk.CTkProgressBar(win, width=self._px(360), height=self._px(12),
+                                   progress_color=C["olive"], fg_color=C["border"])
+        prog.pack(pady=self._px(10))
+        prog.set(0)
+        
+        status = ctk.CTkLabel(win, text="Starting download...", 
+                              font=ctk.CTkFont(family="Inter", size=self.F["label"]),
+                              text_color=C["muted"])
+        status.pack(pady=self._px(5))
+
+        def _update_ui(msg, pct):
+            try:
+                lbl.configure(text=msg)
+                prog.set(pct / 100)
+                status.configure(text=f"Progress: {pct:.1f}%")
+                win.update_idletasks()
+            except Exception:
+                pass
+
+        def _run():
+            try:
+                ok, final_msg = model_manager.ensure_models(progress_callback=_update_ui)
+                if ok:
+                    messagebox.showinfo("Success", "All models are ready!")
+                else:
+                    messagebox.showerror("Error", f"Failed to setup models:\n{final_msg}")
+            finally:
+                try: win.destroy()
+                except Exception: pass
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Body (scrollable) ─────────────────────────────────────────────────────
     def _build_body(self):

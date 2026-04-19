@@ -14,12 +14,10 @@ def get_app_dir():
 BASE_DIR = get_app_dir()
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
-# Model URLs (Example links — these should be verified/updated)
-# For YOLO doclayout, we usually have it locally, but we can host it on Dropbox/HF
 MODEL_SOURCES = {
     "yolo": {
         "filename": "doclayout_yolo_docstructbench_imgsz1024.pt",
-        "url": "https://huggingface.co/antigravity-ai/doclayout-yolo/resolve/main/doclayout_yolo_docstructbench_imgsz1024.pt", # Placeholder
+        "url": "https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench/resolve/main/doclayout_yolo_docstructbench_imgsz1024.pt",
         "target": os.path.join(BASE_DIR, "doclayout_yolo_docstructbench_imgsz1024.pt")
     },
     "easyocr_en": {
@@ -54,43 +52,108 @@ def check_disk_space(required_gb=10):
 def health_check(progress_callback=None):
     """
     Checks if all required models are present.
-    Returns: (bool, str) -> (Success, Message)
+    Returns: (bool, str, list) -> (Success, Message, MissingFeaturesList)
     """
     try:
         setup_portable_paths()
         errors = []
+        missing_models = []
         
-        # 1. Check Disk Space first if download might be needed
-        ok, free = check_disk_space(5) # Minimum 5GB for safety
+        # 1. Check Disk Space
+        ok, free = check_disk_space(5) 
         if not ok:
-            return False, f"Not enough disk space! Only {free}GB left. We need at least 5-10GB for AI models."
+            return False, f"Not enough disk space! Only {free}GB left.", []
 
         # 2. Check YOLO
         yolo_cfg = MODEL_SOURCES["yolo"]
-        if not os.path.exists(yolo_cfg["target"]):
+        if os.path.exists(yolo_cfg["target"]):
+            # Safety: If file is too small (< 1MB), it's likely a text error message from the server
+            if os.path.getsize(yolo_cfg["target"]) < 1024 * 1024:
+                os.remove(yolo_cfg["target"])
+                errors.append(f"Corrupt YOLO weights detected (too small). Deleting to retry.")
+                missing_models.append("yolo")
+        else:
             errors.append(f"Missing YOLO weights: {yolo_cfg['filename']}")
+            missing_models.append("yolo")
             
         # 3. Check Ollama Models
         try:
             import ollama
             try:
-                models = [m['name'] for m in ollama.list()['models']]
+                # Try to ping service first
+                models_info = ollama.list()
+                
+                # Get models list safely (can be list or dict containing 'models')
+                raw_models = models_info.get('models', []) if isinstance(models_info, dict) else getattr(models_info, 'models', [])
+                
+                models = []
+                for m in raw_models:
+                    # Handle both dictionary and object formats
+                    if isinstance(m, dict):
+                        name = m.get('name') or m.get('model')
+                    else:
+                        name = getattr(m, 'model', getattr(m, 'name', None))
+                    
+                    if name:
+                        models.append(name)
                 required = ["minicpm-v:latest", "llama3.2:1b"]
                 for r in required:
-                    if r not in models and r.split(':')[0] not in models:
+                    # Check both with and without tag
+                    found = False
+                    for m in models:
+                        if m.split(':')[0] == r.split(':')[0]:
+                            found = True
+                            break
+                    if not found:
                         errors.append(f"Ollama model missing: {r}")
-            except Exception:
-                errors.append("Ollama service is not running. Please start Ollama Desktop.")
+                        missing_models.append(f"ollama:{r}")
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "connection" in err_msg or "refused" in err_msg:
+                    errors.append("Ollama service is not running. Please start Ollama Desktop.")
+                else:
+                    errors.append(f"Ollama error: {str(e)}")
+                missing_models.append("ollama_service")
         except ImportError:
             errors.append("Ollama library not installed.")
 
         if errors:
-            return False, "\n".join(errors)
+            return False, "\n".join(errors), missing_models
 
-        return True, "All models active and ready."
+        return True, "All models active and ready.", []
         
     except Exception as e:
-        return False, f"Health check crashed: {str(e)}\n{traceback.format_exc()}"
+        return False, f"Health check crashed: {str(e)}", []
+
+def ensure_models(progress_callback=None):
+    """
+    Attempts to download missing YOLO/EasyOCR models.
+    Ollama models must be pulled via Ollama service.
+    """
+    ok, msg, missing = health_check()
+    if ok: return True, msg
+    
+    for item in missing:
+        if item == "yolo":
+            cfg = MODEL_SOURCES["yolo"]
+            if progress_callback: progress_callback("Downloading YOLO weights...", 0)
+            download_model("YOLO Weights", cfg["url"], cfg["target"], progress_callback)
+        elif item.startswith("ollama:"):
+            model_name = item.split(":")[1]
+            if progress_callback: progress_callback(f"Pulling {model_name}...", 0)
+            try:
+                import ollama
+                # Ollama library has its own pull but we wrap it
+                for chunk in ollama.pull(model_name, stream=True):
+                    if 'completed' in chunk and 'total' in chunk:
+                        pct = (chunk['completed'] / chunk['total']) * 100
+                        if progress_callback: progress_callback(f"Pulling {model_name}", pct)
+            except Exception as e:
+                print(f"Failed to pull {model_name}: {e}")
+                
+    # Final check
+    ok, msg, _ = health_check()
+    return ok, msg
 
 def download_model(name, url, dest, progress_callback=None):
     """Downloads a file with progress reporting."""
