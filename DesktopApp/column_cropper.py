@@ -717,6 +717,8 @@ import sys
 import cv2
 import numpy as np
 from pathlib import Path
+from dotenv import load_dotenv
+import model_manager
 
 def get_app_dir():
     if getattr(sys, 'frozen', False):
