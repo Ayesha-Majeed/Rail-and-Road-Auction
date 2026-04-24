@@ -15,3 +15,4 @@ magic-pdf[full]
 #api_key= AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0
 easyocr
 # NOTE: Do NOT remove easyocr from this list. It is required for the OCR pipeline.
+dotenv
