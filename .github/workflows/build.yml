@@ -25,6 +25,15 @@ jobs:
       run: |
         echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
     
+    - name: Create .env for build
+      run: |
+        echo "MONGO_URI=mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" > DesktopApp/.env
+        echo "DB_NAME=Test" >> DesktopApp/.env
+        echo "COLLECTION=Book Data" >> DesktopApp/.env
+        echo "GOOGLE_BOOKS_API_KEY=AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" >> DesktopApp/.env
+        echo "VISION_MODEL=minicpm-v:latest" >> DesktopApp/.env
+        echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
+    
     - name: Build EXE
       # --onedir is MUCh faster and more stable for large AI libraries
       # --collect-all ensures complex libs like magic-pdf/easyocr are fully bundled
