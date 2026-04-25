@@ -34,6 +34,7 @@ jobs:
         --add-data "DesktopApp/icons;icons" `
         --add-data "DesktopApp/olive_high.json;." `
         --add-data "DesktopApp/sync_config.json;." `
+        --add-data "DesktopApp/.env;." `
         --add-data "DesktopApp/main_mineru_ocr.py;." `
         --add-data "DesktopApp/model_manager.py;." `
         --add-data "DesktopApp/column_cropper.py;." `
