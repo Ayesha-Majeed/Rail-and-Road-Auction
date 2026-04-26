@@ -1229,12 +1229,12 @@ class SyncApp(ctk.CTk):
         row.grid_columnconfigure(1, weight=3, uniform="rc")
         row.grid_columnconfigure(2, weight=2, uniform="rc")
         row.grid_columnconfigure(3, weight=2, uniform="rc")
-
         # File name
         name_lbl = ctk.CTkLabel(row, text=book_id,
                                 font=ctk.CTkFont(family="Outfit",
                                                  size=self.F["table_b"], weight="bold"),
-                                text_color=C["text"], anchor="w")
+                                text_color=C["text"], anchor="w",
+                                fg_color="#FFFFFF") # Use solid background to avoid Windows ghosting
         name_lbl.grid(row=0, column=0, sticky="ew", padx=(4, 0), pady=_pad)
 
         # Status badge
@@ -1249,13 +1249,15 @@ class SyncApp(ctk.CTk):
         # Type
         type_lbl = ctk.CTkLabel(row, text=type_,
                                 font=ctk.CTkFont(family="Outfit", size=self.F["table_b"]),
-                                text_color=C["muted"], anchor="w")
+                                text_color=C["muted"], anchor="w",
+                                fg_color="#FFFFFF") # Use solid background to avoid Windows ghosting
         type_lbl.grid(row=0, column=2, sticky="ew", pady=_pad)
 
         # Time
         time_lbl = ctk.CTkLabel(row, text=timestamp,
                                 font=ctk.CTkFont(family="Outfit", size=self.F["table_b"]),
-                                text_color=C["muted"], anchor="w")
+                                text_color=C["muted"], anchor="w",
+                                fg_color="#FFFFFF") # Use solid background to avoid Windows ghosting
         time_lbl.grid(row=0, column=3, sticky="ew", pady=_pad)
 
         # Divider
@@ -2076,7 +2078,8 @@ class SyncApp(ctk.CTk):
                     title_lbl = ctk.CTkLabel(title_body, text=ai_title,
                                  font=ctk.CTkFont(family="Outfit", size=32, weight="bold"),
                                  text_color="#0F172A", anchor="w",
-                                 justify="left"
+                                 justify="left",
+                                 fg_color="#FFFFFF"
                                  )
                     title_lbl.pack(anchor="w", fill="x")
 
@@ -2086,7 +2089,8 @@ class SyncApp(ctk.CTk):
                         subtitle_lbl = ctk.CTkLabel(title_body, text=ai_subtitle,
                                      font=ctk.CTkFont(family="Inter", size=24, weight="normal"),
                                      text_color="#475569", anchor="w",
-                                     justify="left"
+                                     justify="left",
+                                     fg_color="#FFFFFF"
                                      )
                         subtitle_lbl.pack(anchor="w", fill="x", pady=(8, 0))
 
@@ -3380,9 +3384,7 @@ class SyncApp(ctk.CTk):
                     self.log_box.insert("end", batch)
                     self.log_box.see("end") # Force scroll to bottom for real-time tracking
                     self.log_box.configure(state="disabled")
-                    # Only force UI refresh when log is visible to the user
-                    if self.log_visible:
-                        self.update_idletasks()
+                    # DEPRECATED: Removed update_idletasks() as it causes lag/ghosting on Windows 
                 except Exception as e:
                     print(f"DEBUG: Log box insert failed: {e}")
         
