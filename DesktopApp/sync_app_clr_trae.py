@@ -1,4 +1,21 @@
 import customtkinter as ctk
+import os
+import sys
+import io
+
+# ─── Stream Redirection for Windows --windowed mode ───
+class SafeStream:
+    def __init__(self, original): self._s = original
+    def write(self, data):
+        if self._s: self._s.write(data)
+    def flush(self):
+        if self._s: self._s.flush()
+    @property
+    def encoding(self): return getattr(self._s, 'encoding', 'utf-8') or 'utf-8'
+
+if sys.stdout is None: sys.stdout = SafeStream(None)
+if sys.stderr is None: sys.stderr = SafeStream(None)
+
 from tkinter import filedialog, messagebox, PhotoImage, Canvas
 import threading
 import json
@@ -588,12 +605,12 @@ class SyncApp(ctk.CTk):
         hdr.grid_columnconfigure(1, weight=1)  # center stretches
 
         # ── Right: connection badge + settings ────────────────────────────────
-        right = ctk.CTkFrame(hdr, fg_color="transparent")
+        right = ctk.CTkFrame(hdr, fg_color=C["white"])
         right.grid(row=0, column=2, sticky="e", padx=24, pady=16)
 
         self._reg(ctk.CTkLabel(right, text="Connection Status :",
                      font=ctk.CTkFont(family="Inter", size=self.F["label"], weight="normal"),
-                     text_color="#000000"), 13, "Inter", "normal").pack(side="left", padx=(0, 8))
+                     text_color="#000000", fg_color=C["white"]), 13, "Inter", "normal").pack(side="left", padx=(0, 8))
 
         self.conn_badge = ctk.CTkFrame(right, corner_radius=self._px(15),
                                         fg_color=C["s_skip_bg"])  # neutral until verified
@@ -880,13 +897,13 @@ class SyncApp(ctk.CTk):
         # Dashboard title
         lbl = ctk.CTkLabel(self.scroll, text="Dashboard",
                      font=ctk.CTkFont(family="Inter", size=self.F["section"], weight="bold"),
-                     text_color=C["text"])
+                     text_color=C["text"], fg_color=C["bg"])
         self._dashboard_label = self._reg(lbl, 20, "Inter", "bold")
         self._dashboard_label.grid(
             row=0, column=0, sticky="w", padx=init_pad, pady=(28, 18))
 
         # ── 3 Cards — token card (left, wider) + upload pair (right) ────────
-        cards = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        cards = ctk.CTkFrame(self.scroll, fg_color=C["bg"])
         cards.grid(row=1, column=0, sticky="ew", padx=init_pad, pady=(0, 24))
         self._cards_frame = cards
         # Use uniform group — all 4 logical "units" same size
@@ -899,7 +916,7 @@ class SyncApp(ctk.CTk):
         self._build_token_card(cards)
 
         # Upload cards sub-frame — each upload gets equal half of col=1
-        upload_pair = ctk.CTkFrame(cards, fg_color="transparent")
+        upload_pair = ctk.CTkFrame(cards, fg_color=C["bg"])
         upload_pair.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=4)
         upload_pair.grid_columnconfigure(0, weight=1, uniform="up")
         upload_pair.grid_columnconfigure(1, weight=1, uniform="up")
@@ -937,7 +954,7 @@ class SyncApp(ctk.CTk):
         card.grid_columnconfigure(0, weight=1)
         card.grid_rowconfigure(0, weight=1)
 
-        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner = ctk.CTkFrame(card, fg_color=C["card"])
         inner.grid(row=0, column=0, padx=self._px(19), pady=self._px(27), sticky="ew")
         inner.grid_columnconfigure(0, weight=1)
 
@@ -1136,11 +1153,11 @@ class SyncApp(ctk.CTk):
         # Section title
         self._reg(ctk.CTkLabel(self.act_frame, text="Recent Activity",
                      font=ctk.CTkFont(family="Outfit", size=self.F["heading"], weight="bold"),
-                     text_color=C["text"]), 16, "Outfit", "bold").pack(anchor="w", padx=20, pady=(16, 0))
+                     text_color=C["text"], fg_color=C["white"]), 16, "Outfit", "bold").pack(anchor="w", padx=20, pady=(16, 0))
         ctk.CTkFrame(self.act_frame, height=1, fg_color=C["border"]).pack(fill="x", padx=20, pady=(8, 0))
 
         # Table header
-        th = ctk.CTkFrame(self.act_frame, fg_color="transparent", height=self._px(35))
+        th = ctk.CTkFrame(self.act_frame, fg_color=C["white"], height=self._px(35))
         th.pack(fill="x", padx=20, pady=(8, 0))
         th.grid_columnconfigure(0, weight=4, uniform="th")
         th.grid_columnconfigure(1, weight=3, uniform="th")
@@ -1151,7 +1168,7 @@ class SyncApp(ctk.CTk):
         for i, col_name in enumerate(["File Name", "Status", "Type", "Upload Time"]):
             self._reg(ctk.CTkLabel(th, text=col_name,
                          font=ctk.CTkFont(family="Outfit", size=self.F["table_h"], weight="bold"),
-                         text_color="#000000", anchor="w"), 13, "Outfit", "bold").grid(
+                         text_color="#000000", anchor="w", fg_color=C["white"]), 13, "Outfit", "bold").grid(
                 row=0, column=i, sticky="ew", padx=(4, 0), pady=8)
 
         # Header divider
@@ -1172,7 +1189,7 @@ class SyncApp(ctk.CTk):
         # ── Live Pipeline Log (Toggleable) ──────────
         ctk.CTkFrame(self.act_frame, height=1, fg_color=C["border"]).pack(fill="x", padx=20, pady=(12, 0))
         
-        log_header = ctk.CTkFrame(self.act_frame, fg_color="transparent")
+        log_header = ctk.CTkFrame(self.act_frame, fg_color=C["white"])
         log_header.pack(fill="x", padx=20, pady=8)
         
         self._reg(ctk.CTkLabel(log_header, text="Live Pipeline Logs",
@@ -1181,7 +1198,7 @@ class SyncApp(ctk.CTk):
         
         self.log_toggle_btn = ctk.CTkButton(log_header, text="Show Logs", width=80, height=24,
                                             corner_radius=6, border_width=1, border_color=C["border"],
-                                            fg_color="transparent", text_color=C["muted"],
+                                            fg_color=C["white"], text_color=C["muted"],
                                             font=ctk.CTkFont(size=self.F["muted"]),
                                             hover_color="#F5F5F5",
                                             command=self._toggle_log_box)
@@ -1450,7 +1467,7 @@ class SyncApp(ctk.CTk):
             preview.grid_propagate(False)
 
             # --- Layout Stabilization Loader ---
-            loader_container = ctk.CTkFrame(preview, fg_color="transparent")
+            loader_container = ctk.CTkFrame(preview, fg_color=C["white"])
             loader_container.place(relx=0.5, rely=0.5, anchor="center")
 
             spinner_canvas = Canvas(loader_container, width=64, height=64, bd=0, highlightthickness=0, bg=C["white"])
@@ -1500,7 +1517,7 @@ class SyncApp(ctk.CTk):
             info.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
             info.grid_propagate(False)
             status_lbl = ctk.CTkLabel(win, text="", font=ctk.CTkFont(family="Outfit", size=self.F["muted"]),
-                                  text_color=C["muted"], anchor="w", justify="left") 
+                                  text_color=C["muted"], anchor="w", justify="left", fg_color=C["bg"]) 
             status_lbl.grid(row=2, column=0, sticky="ew", padx=12, pady=(0,8))
             win._info_scroll_canvas = None
 
@@ -1547,7 +1564,7 @@ class SyncApp(ctk.CTk):
             def _do_detail_resize():
                 win._resize_job = None
                 if win.winfo_exists():
-                    win.update_idletasks()
+                    # Reduced update_idletasks frequency for Windows stability
                     _sync_detail_split()
                     _update_status_wrap()
                     if hasattr(win, "_render_main_cmd"):
@@ -1560,7 +1577,6 @@ class SyncApp(ctk.CTk):
 
             def _do_final_detail_pass():
                 if win.winfo_exists():
-                    win.update_idletasks()
                     if hasattr(win, "_render_main_cmd"):
                         win._render_main_cmd()
                     # Hide shroud after final stable pass
@@ -1606,7 +1622,7 @@ class SyncApp(ctk.CTk):
 
             # Thumbs: Horizontal Scrollable Frame for 100% stability
             thumbs_scroll = ctk.CTkScrollableFrame(body, orientation="horizontal", 
-                                                 fg_color="transparent", height=150)
+                                                 fg_color=C["white"], height=150)
             thumbs_scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0,12))
             # body.grid_rowconfigure(1, weight=0) is fine, it will take 'height' from widget
             
@@ -1924,12 +1940,12 @@ class SyncApp(ctk.CTk):
                 if has_ai:
                     # ── AI Results View ──────────────────────────────
                     # Scrollable to handle long content
-                    info_wrap = ctk.CTkFrame(info, fg_color="transparent")
+                    info_wrap = ctk.CTkFrame(info, fg_color=C["white"])
                     info_wrap.pack(fill="both", expand=True, padx=4, pady=4)
 
                     info_scroll = ctk.CTkScrollableFrame(
                         info_wrap,
-                        fg_color="transparent",
+                        fg_color=C["white"],
                         scrollbar_fg_color="#E5E7EB",
                         scrollbar_button_color=C["olive_dk"],
                         scrollbar_button_hover_color=C["olive"]
@@ -1959,7 +1975,7 @@ class SyncApp(ctk.CTk):
                             lbl.configure(wraplength=max(120, event.width - padding))
 
 
-                    title_badge_wrap = ctk.CTkFrame(title_hdr, fg_color="transparent")
+                    title_badge_wrap = ctk.CTkFrame(title_hdr, fg_color="#FFFFFF")
                     title_badge_wrap.pack(side="left", padx=24)
 
                     ctk.CTkLabel(title_badge_wrap, text="Ai", width=32, height=32,
@@ -2050,7 +2066,7 @@ class SyncApp(ctk.CTk):
                         btn_row.pack(pady=30)
                         
                         ctk.CTkButton(btn_row, text="Cancel", width=160, height=50, corner_radius=10,
-                                     fg_color="#F1F5F9", text_color="#64748B", hover_color="#E2E8F0",
+                                     fg_color="#FFFFFF", text_color="#667085", hover_color="#E2E8F0",
                                      command=edit_win.destroy).pack(side="left", padx=10)
                                      
                         ctk.CTkButton(btn_row, text="Save Changes", width=220, height=50, corner_radius=10,
@@ -2071,7 +2087,7 @@ class SyncApp(ctk.CTk):
                     title_edit.bind("<Button-1>", _on_edit_title)
 
                     # Title Body
-                    title_body = ctk.CTkFrame(title_card, fg_color="transparent")
+                    title_body = ctk.CTkFrame(title_card, fg_color="#FFFFFF")
                     title_body.pack(fill="x", padx=24, pady=24)
 
                     ai_title = doc.get("title", "") or "(Not Found)"
@@ -2115,7 +2131,7 @@ class SyncApp(ctk.CTk):
                     desc_hdr.pack_propagate(False)
 
                     # Description Badge + Label
-                    desc_badge_wrap = ctk.CTkFrame(desc_hdr, fg_color="transparent")
+                    desc_badge_wrap = ctk.CTkFrame(desc_hdr, fg_color="#FFFFFF")
                     desc_badge_wrap.pack(side="left", padx=24)
 
                     ctk.CTkLabel(desc_badge_wrap, text="Ai", width=32, height=32,
@@ -2134,7 +2150,8 @@ class SyncApp(ctk.CTk):
                     desc_lbl = ctk.CTkLabel(desc_card, text=description_val,
                                  font=ctk.CTkFont(family="Inter", size=22),
                                  text_color="#000000", anchor="nw",
-                                 justify="left"
+                                 justify="left",
+                                 fg_color="#FFFFFF"
                                  )
                     desc_lbl.pack(anchor="nw", padx=24, pady=24, fill="both", expand=True)
                     desc_card.bind("<Configure>", lambda e, l=desc_lbl: _on_label_resize(e, l, 64), add="+")
@@ -2162,22 +2179,22 @@ class SyncApp(ctk.CTk):
                     traits_card.pack(fill="x", padx=12, pady=6)
 
                     # Traits Header
-                    traits_hdr = ctk.CTkFrame(traits_card, fg_color="transparent", height=48, corner_radius=0)
+                    traits_hdr = ctk.CTkFrame(traits_card, fg_color="#FFFFFF", height=48, corner_radius=0)
                     traits_hdr.pack(fill="x")
                     traits_hdr.pack_propagate(False)
 
                     ctk.CTkLabel(traits_hdr, text="🏷️ Detected Traits",
                                  font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
-                                 text_color="#111827").pack(side="left", padx=24)
+                                 text_color="#111827", fg_color="#FFFFFF").pack(side="left", padx=24)
 
                     # Traits Body
-                    traits_body = ctk.CTkFrame(traits_card, fg_color="transparent")
+                    traits_body = ctk.CTkFrame(traits_card, fg_color="#FFFFFF")
                     traits_body.pack(fill="x", padx=24, pady=(0, 24))
 
                     # 2. Author Subsection
                     ctk.CTkLabel(traits_body, text="Author",
                                  font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280").pack(anchor="w", pady=(0, 10))
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(0, 10))
 
                     author_val = doc.get("author", "") or "(Not Found)"
                     author_pill = ctk.CTkFrame(traits_body, fg_color="#EFF6FF", border_width=1, border_color="#BFDBFE", corner_radius=10)
@@ -2185,13 +2202,13 @@ class SyncApp(ctk.CTk):
                     author_lbl = ctk.CTkLabel(author_pill, text=author_val,
                                  font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
                                  text_color="#1D4ED8", padx=20, pady=12,
-                                 justify="left", anchor="w")
+                                 justify="left", anchor="w", fg_color="#EFF6FF")
                     author_lbl.pack(fill="x")
 
                     # 3. Edition Subsection
                     ctk.CTkLabel(traits_body, text="Edition",
                                  font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280").pack(anchor="w", pady=(16, 10))
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(16, 10))
                     
                     edition_val = doc.get("edition", "") or "(Not Found)"
                     edition_pill = ctk.CTkFrame(traits_body, fg_color="#FFFBEB", border_width=1, border_color="#FEF3C7", corner_radius=10)
@@ -2199,13 +2216,13 @@ class SyncApp(ctk.CTk):
                     edition_lbl = ctk.CTkLabel(edition_pill, text=edition_val,
                                  font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
                                  text_color="#B45309", padx=20, pady=12,
-                                 justify="left", anchor="w")
+                                 justify="left", anchor="w", fg_color="#FFFBEB")
                     edition_lbl.pack(fill="x")
 
                     # 4. ISBN Subsection
                     ctk.CTkLabel(traits_body, text="ISBN",
                                  font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280").pack(anchor="w", pady=(16, 10))
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(16, 10))
                     
                     isbn_val = doc.get("isbn", "") or "(Not Found)"
                     isbn_pill = ctk.CTkFrame(traits_body, fg_color="#F3F4F6", border_width=1, border_color="#D1D5DB", corner_radius=10)
@@ -2236,12 +2253,12 @@ class SyncApp(ctk.CTk):
                                  text_color="#9CA3AF").pack(anchor="w", padx=24, pady=12)
 
                 else:
-                    info_wrap = ctk.CTkFrame(info, fg_color="transparent")
+                    info_wrap = ctk.CTkFrame(info, fg_color=C["white"])
                     info_wrap.pack(fill="both", expand=True, padx=4, pady=4)
 
                     info_scroll = ctk.CTkScrollableFrame(
                         info_wrap,
-                        fg_color="transparent",
+                        fg_color=C["white"],
                         scrollbar_fg_color="#E5E7EB",
                         scrollbar_button_color=C["olive_dk"],
                         scrollbar_button_hover_color=C["olive"]

@@ -1,4 +1,20 @@
 import os
+import sys
+import io
+
+# ─── Stream Redirection for Windows --windowed mode ───
+class SafeStream:
+    def __init__(self, original): self._s = original
+    def write(self, data):
+        if self._s: self._s.write(data)
+    def flush(self):
+        if self._s: self._s.flush()
+    @property
+    def encoding(self): return getattr(self._s, 'encoding', 'utf-8') or 'utf-8'
+
+if sys.stdout is None: sys.stdout = SafeStream(None)
+if sys.stderr is None: sys.stderr = SafeStream(None)
+
 import re
 import sys
 import json

@@ -72,8 +72,8 @@ import column_cropper as cropper
 RAW_IMAGE_FOLDER = os.getenv("IMAGE_FOLDER",  os.path.join(PORTABLE_BASE, "test_dataset"))
 CROPS_FOLDER     = os.getenv("CROPS_FOLDER",  os.path.join(PORTABLE_BASE, "doclayout_column_cropings/column_crops"))
 OUTPUT_FOLDER    = os.getenv("OUTPUT_FOLDER", os.path.join(PORTABLE_BASE, "mineru_results"))
-VISION_MODEL     = os.getenv("VISION_MODEL",  "minicpm-v")
-TEXT_MODEL       = os.getenv("TEXT_MODEL",    "llama3.2:1b") # 1B for absolute 8GB stability
+VISION_MODEL     = os.getenv("VISION_MODEL", "minicpm-v:latest")
+TEXT_MODEL       = os.getenv("TEXT_MODEL",    VISION_MODEL) # Use Vision model for text if text model not specified
 SEPARATOR        = "─" * 60
 
 # Set PyTorch memory allocation configuration for flexibility
@@ -573,7 +573,7 @@ Text to search:
 {text[:3000]}"""
 
     try:
-        resp = ollama.chat(model=TEXT_MODEL, messages=[{"role": "user", "content": prompt}])
+        resp = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
         res = resp["message"]["content"].strip().strip('"').strip()
 
         res = re.sub(
@@ -652,7 +652,7 @@ def _sanity_check_author(raw: str) -> str:
 def generate_description(interior_text: str, title: str = "") -> str:
     if not interior_text.strip():
         return ""
-    log_progress(f"Generating description via {TEXT_MODEL}")
+    log_progress(f"Generating description via {VISION_MODEL}")
     
     prompt = f"""Write a strictly 1-2 line direct description of this book based on the provided text.
 Title: {title}
@@ -665,7 +665,7 @@ Rules:
 5. Be professional and concise. One paragraph only."""
     
     try:
-        response = ollama.chat(model=TEXT_MODEL, messages=[{"role": "user", "content": prompt}])
+        response = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
         desc = response["message"]["content"].strip()
         # Clean up any potential AI intro meta-talk if it still slips through
         desc = re.sub(r'^(Here is|This is|A summary of|Description:).*?[:\-]\s*', '', desc, flags=re.IGNORECASE).strip()
@@ -957,7 +957,7 @@ def extract_edition_from_text(text: str, book_title: str = "", isbn: str = "") -
     {text[:3000]}"""
     
     try:
-        resp = ollama.chat(model=TEXT_MODEL, messages=[{"role": "user", "content": prompt}])
+        resp = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
         res = resp["message"]["content"].strip().strip('"').strip()
         
         validated = _sanity_check_edition(res)
