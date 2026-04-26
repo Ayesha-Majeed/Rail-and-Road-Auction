@@ -17,11 +17,20 @@ from PIL import Image
 # ─── Load Environment ────────────────────────────────────────────────────────
 def get_app_dir():
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        # If frozen, look in the directory of the executable
+        # AND check _MEIPASS for bundled files
+        exe_dir = os.path.dirname(sys.executable)
+        if hasattr(sys, '_MEIPASS'):
+            # Bundle root (internal)
+            return sys._MEIPASS
+        return exe_dir
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_app_dir()
-env_path = os.path.join(BASE_DIR, ".env")
+# Prefer external .env if it exists next to the EXE, else use internal
+exe_env = os.path.join(os.path.dirname(sys.executable), ".env")
+internal_env = os.path.join(BASE_DIR, ".env")
+env_path = exe_env if os.path.exists(exe_env) else internal_env
 load_dotenv(env_path)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -35,37 +44,61 @@ def check_env_loaded(log_fn=print):
     else:
         log_fn(f"  ✅ Environment loaded from: {BASE_DIR}")
 
-# ─── Lazy EasyOCR Engine (CPU-only to avoid VRAM contention) ─────────────────
+# ─── Shared EasyOCR Engine (Singleton across modules) ───────────────────────
 _ocr_reader = None
 
-def _get_ocr_reader():
-    """Lazy singleton: loads EasyOCR with GPU support."""
+def _get_ocr_reader(log_fn=print):
+    """Lazy singleton: loads EasyOCR with GPU support, shared via sys attribute."""
     global _ocr_reader
+    
+    # 1. Check module-local singleton
     if _ocr_reader is not None:
         return _ocr_reader
+    
+    # 2. Check process-wide singleton (to avoid conflict with main_mineru_ocr)
+    if hasattr(sys, '_shared_easyocr_reader') and sys._shared_easyocr_reader is not None:
+        _ocr_reader = sys._shared_easyocr_reader
+        return _ocr_reader
+
     try:
-        # USER REQUEST: Ensure GPU is ACTIVE. EasyOCR logs "Using CPU" if this is False.
-        # Check torch directly as OMEN systems have CUDA.
+        log_fn("    ⏳ Initializing ISBN EasyOCR Reader...")
         import torch
+        # Force CPU for ISBN pass on Windows IF it's a portable build, 
+        # to prevent CUDA context hangs during rapid sync.
         gpu_bool = torch.cuda.is_available()
+        
+        # LOGIC: If on Windows, we check if GPU is already busy
+        if sys.platform == "win32" and gpu_bool:
+            # Safe check: if VRAM is extremely low, fallback to CPU
+            try:
+                free_vram = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+                if free_vram < 500 * 1024 * 1024: # Less than 500MB
+                    log_fn("    ⚠️ Low VRAM detected. Using CPU for ISBN pass for stability.")
+                    gpu_bool = False
+            except: pass
+
         _ocr_reader = easyocr.Reader(['en'], gpu=gpu_bool)
+        # Store for other modules to find
+        sys._shared_easyocr_reader = _ocr_reader
+        log_fn(f"    ✅ EasyOCR Ready (GPU={gpu_bool})")
     except Exception as e:
-        print(f"❌ EasyOCR init failed: {e}")
+        log_fn(f"    ❌ EasyOCR init failed: {e}")
         _ocr_reader = None
     return _ocr_reader
 
 def unload_isbn_reader():
-    """Unloads the ISBN OCR reader to free VRAM for Phase 2 (MinerU)."""
+    """Unloads the shared reader from memory."""
     global _ocr_reader
+    if hasattr(sys, '_shared_easyocr_reader'):
+        del sys._shared_easyocr_reader
+        sys._shared_easyocr_reader = None
+    
     if _ocr_reader is not None:
-        print("🧹 Unloading ISBN EasyOCR to free VRAM...")
-        # Clear specific reader
+        print("🧹 Unloading Shared EasyOCR to free VRAM...")
         del _ocr_reader
         _ocr_reader = None
-        # Flush Torch
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.synchronize()
         import gc
         gc.collect()
 
@@ -105,6 +138,7 @@ def strict_extraction_regex(raw_text: str) -> list[str]:
     """
     labeled_isbns = []
     bare_isbns = []
+    likely_isbns = [] # Labeled but failed checksum
     
     # ── TIER 1: MATCHING ──
     # Label pattern allows standard ISBN prefix plus full phrases.
@@ -144,14 +178,24 @@ def strict_extraction_regex(raw_text: str) -> list[str]:
         target_list = labeled_isbns if has_strong_label else bare_isbns
         
         if len(clean) == 10:
-            if validate_isbn10(clean) and clean not in (labeled_isbns + bare_isbns):
-                target_list.append(clean)
+            if validate_isbn10(clean):
+                if clean not in (labeled_isbns + bare_isbns):
+                    target_list.append(clean)
+            elif has_strong_label:
+                if clean not in likely_isbns:
+                    likely_isbns.append(clean)
         elif len(clean) == 13:
-            if validate_isbn13(clean) and clean not in (labeled_isbns + bare_isbns):
-                target_list.append(clean)
+            if validate_isbn13(clean):
+                if clean not in (labeled_isbns + bare_isbns):
+                    target_list.append(clean)
+            elif has_strong_label:
+                if clean not in likely_isbns:
+                    likely_isbns.append(clean)
 
     if labeled_isbns:
         return labeled_isbns
+    if likely_isbns:
+        return likely_isbns
     return bare_isbns
 
     # ── TIER 2: LABEL-ANCHORED FUZZY EXTRACTION ──
@@ -193,7 +237,8 @@ def extract_isbn_from_image(image_path: str, log_fn=print, is_cover=False):
     """
     full_ocr_text = ""
     
-    reader = _get_ocr_reader()
+    log_fn(f"    ⏳ Scanning {Path(image_path).name}...")
+    reader = _get_ocr_reader(log_fn)
     if reader:
         try:
             results = reader.readtext(image_path)
@@ -219,6 +264,7 @@ def extract_isbn_from_image(image_path: str, log_fn=print, is_cover=False):
 
     # Tier 3: AI Smart Parsing
     if full_ocr_text.strip():
+        log_fn("    ⏳ ISBN Tier 3: AI Smart Parsing...")
         text_prompt = (
             "SYSTEM: You are a precision extraction machine. Find the ISBN-10 or ISBN-13.\n"
             "OCR text often misreads '|', 'I', or 'l' as the number '1'.\n"
@@ -329,11 +375,16 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
     
     return None
 
-def fetch_metadata_local_ai(image_path: str, log_fn=print) -> dict:
-    """Zero-logic fallback using Vision model for basic info."""
+def fetch_metadata_local_ai(image_path: str, accumulated_text: str = "", log_fn=print) -> dict:
+    """Zero-logic fallback using Vision model for basic info + collected OCR text."""
+    # Use text context if available (limit to 3000 chars for prompt safety)
+    text_context = f"\nEXTRACTED TEXT CONTEXT:\n{accumulated_text[:3000]}\n" if accumulated_text else ""
+    
     prompt = (
-        "Extract these details from this book image:\n"
-        "1. Title\n2. Author(s)\n3. Edition (ONLY if explicitly mentioned, otherwise 'N/A')\n4. Description (1 sentence)\n"
+        "Extract these details from this book image (Front Cover):\n"
+        "1. Title\n2. Author(s)\n3. Edition (ONLY if explicitly mentioned, otherwise 'N/A')\n"
+        "4. Description (1-2 sentences summarizing the book based on title and provided text context below)\n"
+        f"{text_context}\n"
         "RULES: If any detail is missing or ambiguous, return 'N/A'. DO NOT GUESS DATES OR YEARS.\n"
         "Output ONLY a JSON block with keys: title, authors, edition, description."
     )
@@ -343,7 +394,8 @@ def fetch_metadata_local_ai(image_path: str, log_fn=print) -> dict:
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             return json.loads(match.group(0))
-    except: pass
+    except Exception as e:
+        log_fn(f"  ⚠️ Local AI fallback failed: {e}")
     return {"title":"N/A", "authors":"N/A", "edition":"N/A", "description":"N/A"}
 
 # ─── CORE PIPELINE ───────────────────────────────────────────────────────────
@@ -423,12 +475,24 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
         meta = fetch_metadata_google(official_isbn, log_fn)
         if not meta:
             log_fn("  🌍 No Google metadata. Using Local AI Fallback...")
-            meta = fetch_metadata_local_ai(file_map.get(source_page, files[0]), log_fn)
+            # USER REQUEST: Use all collected text for description
+            all_text = "\n".join(collected_ocr_texts)
+            # ALWAYS use Front Cover (Page 1) for visual extraction if available
+            fallback_img = file_map.get(1, file_map.get(source_page, files[0]))
+            meta = fetch_metadata_local_ai(fallback_img, all_text, log_fn)
         
         result["metadata"] = meta
         log_fn(f"  🎉 SUCCESS: {meta.get('title', 'Unknown Title')}")
     else:
-        log_fn("  ❌ NO ISBN FOUND.")
+        log_fn("  ❌ NO ISBN FOUND. Attempting visual extraction from front cover...")
+        all_text = "\n".join(collected_ocr_texts)
+        fallback_img = file_map.get(1, files[0])
+        meta = fetch_metadata_local_ai(fallback_img, all_text, log_fn)
+        result["metadata"] = meta
+        if meta and meta.get("title") != "N/A":
+            log_fn(f"  🎉 Visual Success: {meta.get('title')}")
+        else:
+            log_fn("  ❌ Visual extraction failed.")
 
     return result
 

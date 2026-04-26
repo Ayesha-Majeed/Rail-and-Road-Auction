@@ -56,7 +56,11 @@ import model_manager
 model_manager.setup_portable_paths()
 PORTABLE_BASE = model_manager.BASE_DIR
 
-load_dotenv(os.path.join(PORTABLE_BASE, ".env"))
+# Prefer external .env if it exists next to the EXE, else use internal
+exe_env = os.path.join(os.path.dirname(sys.executable), ".env")
+internal_env = os.path.join(PORTABLE_BASE, ".env")
+env_path = exe_env if os.path.exists(exe_env) else internal_env
+load_dotenv(env_path)
 
 sys.path.insert(0, PORTABLE_BASE)
 import mineru_without_preprocessing_old as mineru
@@ -83,20 +87,38 @@ os.makedirs(CROPS_FOLDER,  exist_ok=True)
 _easy_reader = None
 
 def get_easyocr_reader():
-    """Lazy singleton: loads EasyOCR with GPU support."""
+    """Lazy singleton: loads EasyOCR with GPU support, shared via sys attribute."""
     global _easy_reader
-    if _easy_reader is None:
-        log_progress("Initializing EasyOCR Reader...")
-        import torch
-        gpu_bool = torch.cuda.is_available()
-        _easy_reader = easyocr.Reader(['en'], gpu=gpu_bool)
+    
+    # 1. Check module-local singleton
+    if _easy_reader is not None:
+        return _easy_reader
+        
+    # 2. Check process-wide singleton (to bridge with isbn_extractor_ui)
+    import sys
+    if hasattr(sys, '_shared_easyocr_reader') and sys._shared_easyocr_reader is not None:
+        _easy_reader = sys._shared_easyocr_reader
+        return _easy_reader
+
+    log_progress("Initializing EasyOCR Reader...")
+    import torch
+    gpu_bool = torch.cuda.is_available()
+    _easy_reader = easyocr.Reader(['en'], gpu=gpu_bool)
+    
+    # Store for other modules
+    sys._shared_easyocr_reader = _easy_reader
     return _easy_reader
 
 def unload_easyocr():
-    """Unloads EasyOCR to free VRAM for Ollama Vision."""
+    """Unloads the shared reader from memory."""
     global _easy_reader
+    import sys
+    if hasattr(sys, '_shared_easyocr_reader'):
+        del sys._shared_easyocr_reader
+        sys._shared_easyocr_reader = None
+        
     if _easy_reader is not None:
-        log_progress("Unloading EasyOCR to free VRAM...")
+        log_progress("Unloading Shared EasyOCR to free VRAM...")
         del _easy_reader
         _easy_reader = None
         cleanup_gpu()
@@ -691,6 +713,11 @@ def _sanity_check_edition(raw: str) -> str:
     # Handle escaped variants like NOT\_FOUND
     s = raw.replace('\\', '').strip().strip('"').strip("'").strip()
     up = s.upper()
+
+    # STRICT BLACKLIST (Ignore binding formats/formats even if they contain the word "Edition")
+    blacklist = ["HARD COVER", "SOFT COVER", "SOFTCOVER", "HARDCOVER", "PAPERBACK", "CLOTH", "LEATHER", "PLASTIC", "WRAPPER", "BOUND"]
+    if any(b in up for b in blacklist):
+        return ""
     
     # Reject known bad responses
     bad_exact = {"NOT_FOUND", "YES", "NO", "TRUE", "FALSE", "NONE", "EDITION", 
@@ -703,7 +730,7 @@ def _sanity_check_edition(raw: str) -> str:
         "DIESEL", "STEAM", "TRAIN", "RAILROAD", "RAILWAY", "PACIFIC", "UNION",
         "LOCOMOTIVE", "ENGINE", "PENNSYLVANIA", "ELECTRIC", "TRANSPORT",
         "SYSTEM", "LINE", "ROAD", "STEEL", "COAL", "BLACK DIAMOND", "BLACK GOLD",
-        "VOLUME", "CHAPTER", "INDEX", "ROSTER", "PHOTO", "COLLECTION"
+        "VOLUME", "VOL.", "VOL ", "CHAPTER", "INDEX", "ROSTER", "PHOTO", "COLLECTION", "BOOK", "PART"
     ]
     for subj in subject_blacklist:
         if subj in up:
@@ -772,43 +799,56 @@ def _sanity_check_edition(raw: str) -> str:
         if "EDITION" not in up:
             return ""
     
-    # Reject if it contains journal numbering patterns (Volume, Issue, Year, No.)
-    # unless it explicitly says "EDITION", "PRINTING", or "ANNIVERSARY"
+    # Reject if it contains journal numbering patterns unless it's a known edition keyword
     if re.search(r'\b(VOL\.?|VOLUME|ISSUE|NO\.?|YEAR)\b', up):
         if not any(k in up for k in ["EDITION", "PRINTING", "ANNIVERSARY", "REVISED"]):
             return ""
     
-    # Reject responses that are too long (editions are short phrases, max ~6 words)
-    if len(s.split()) > 8:
+    # Allowed keywords (Strictly for Printing/Edition, excluding binding like Hard/Soft Cover)
+    keywords = ["EDITION", "PRINTING", "ANNIVERSARY", "REVISED", "UPDATED", "IMPRESSION", "REPRINT", "1ST", "2ND", "3RD", "FIRST", "SECOND", "THIRD", "COMMEMORATIVE", "SPECIAL"]
+    
+    lines = [ln.strip() for ln in s.split('\n') if ln.strip()]
+    valid_line = ""
+    for ln in lines:
+        lup = ln.upper()
+        if any(k in lup for k in keywords):
+            valid_line = ln
+            break
+    
+    if not valid_line:
+        return ""
+    
+    # Clean up the valid line
+    s = valid_line
+    up = s.upper()
+
+    # Reject responses that are too long (max ~10 words to allow dates/printings)
+    if len(s.split()) > 10:
         return ""
     
     # Reject if it starts with conversational patterns
     conversational = ["the book", "this book", "i can", "i found", "based on", "there is", "it appears", "it seems", "the edition is", "it is listed as"]
     for c in conversational:
         if up.startswith(c.upper()):
-            # Try to strip it instead of just rejecting? No, user wants strict 1-2 words.
-            # But let's try to extract the relevant part if it's there.
             s = re.sub(r'^(?i)(the book was|this book was|the edition is|it is listed as|the book|this book|i found|i can|based on|there is|it appears|it seems)[:\-]?\s*', '', s)
             up = s.upper()
 
-    # Re-check length after stripping
-    if len(s.split()) > 4: # Strict limit for editions
-        return ""
-
-    return s
+    res = s.strip().strip('.').strip()
+    return res if res.upper() not in ["NOT_FOUND", "NOT FOUND"] else ""
 
 def find_edition_via_regex(text: str) -> str:
     """Quickly search for edition keywords in OCR text."""
     if not text: return ""
     # Broaden regex to capture the following date or dash (e.g. "6th Printing — June 1993")
     patterns = [
-        r'(?i)\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:printing|edition)[^\n,.]+[\n,.]?',
-        r'(?i)\b(?:1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|\d+th)\s+(?:printing|edition)[^\n,.]+[\n,.]?',
-        r'(?i)\banniversary\s+edition[^\n,.]*',
-        r'(?i)\bupdated\s+edition[^\n,.]*',
-        r'(?i)\brevised\s+edition[^\n,.]*',
-        r'(?i)\brevised\s+and\s+updated[^\n,.]*',
-        r'(?i)\brevised\b[^\n,.]*',
+        # Match common ordinal printings/editions with optional colon and following text (date)
+        r'(?i)\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+th)\s+(?:printing|edition)[:\s]+[^\n,]+',
+        r'(?i)\banniversary\s+edition[^\n,]*',
+        r'(?i)\bupdated\s+edition[^\n,]*',
+        r'(?i)\brevised\s+edition[^\n,]*',
+        r'(?i)\brevised\s+and\s+updated[^\n,]*',
+        r'(?i)\brevised\b[^\n,]*',
+        r'(?i)\bcopyright\s+(\d{4})\s+by\b[^\n]*', # Sometimes people use copyright date as edition/printing tag
     ]
     found = []
     for p in patterns:
@@ -829,6 +869,8 @@ def find_edition_via_regex(text: str) -> str:
                     if w in phrase.lower():
                         num = n
                         break
+            # Remove trailing punctuation (common in OCR/Fast-Match noise)
+            phrase = re.sub(r'[\)\:\.\,]+$', '', phrase.strip())
             found.append((num, phrase.strip()))
     
     if found:
@@ -838,7 +880,7 @@ def find_edition_via_regex(text: str) -> str:
     return ""
 
 
-def extract_edition_from_cover(front: str, back: str = "") -> str:
+def extract_edition_from_cover(front: str, back: str = "", isbn: str = "") -> str:
     """
     Find edition/printing info via Vision LLM.
     'front' can be a path string or a list of path strings.
@@ -850,16 +892,21 @@ def extract_edition_from_cover(front: str, back: str = "") -> str:
     
     if not images: return ""
     
-    prompt = f"""Find the edition or printing information on this book page.
+    prompt = f"""Find the edition or printing information on this book page."""
+    if isbn and isbn != "N/A":
+        prompt += f"\nNote: The book's ISBN is {isbn}."
+        
+    prompt += """
 RULES:
-1. Return ONLY the exact edition/printing phrase (e.g. "First Edition", "3rd Printing").
-2. ABSOLUTELY NO technical codes, Dewey Decimal numbers, or Library of Congress metadata (e.g. IGNORE "385'.5", "TF725").
-3. ABSOLUTELY NO sentences, introductory phrases, or explanations. 
-4. MUST BE CONCISE: 1-3 words maximum.
-5. If there are multiple printings listed (e.g. 1st, 2nd, 3rd), return ONLY the LATEST (highest) one.
-6. INCLUDE THE DATE if it is listed with the printing (e.g. "6th Printing, June 1993").
-7. If no edition info is found, return ONLY: NOT_FOUND
-8. IGNORE barcodes and Library of Congress classification numbers."""
+1. Return ONLY the exact edition/printing phrase (e.g. "First Edition", "3rd Printing", "Anniversary Edition", "Revised & Updated").
+2. ABSOLUTELY NO technical codes, Dewey Decimal numbers, or Library of Congress metadata.
+3. ABSOLUTELY NO BINDING INFO. IGNORE ALL TERMS LIKE "Hardcover", "Softcover", "Paperback", "Cloth", "Edition" linked to binding.
+4. ABSOLUTELY NO sentences, introductory phrases, or explanations. 
+5. MUST BE CONCISE: 1-5 words maximum.
+6. If there are multiple printings listed (e.g. 1st, 2nd, 3rd), return ONLY the LATEST (highest) one.
+7. INCLUDE THE DATE if it is listed with the printing (e.g. "6th Printing, June 1993").
+8. ABSOLUTELY NO VOLUME NUMBERS. (Example: "Volume One" is NOT "First Edition").
+9. If no edition info is found, return ONLY: NOT_FOUND"""
     
     for img in images:
         log_progress(f"Checking {Path(img).name} for edition")
@@ -886,7 +933,7 @@ RULES:
     log_fail("not found")
     return ""
 
-def extract_edition_from_text(text: str, book_title: str = "") -> str:
+def extract_edition_from_text(text: str, book_title: str = "", isbn: str = "") -> str:
     if not text.strip(): return ""
     log_progress("Checking interior for edition")
     
@@ -894,14 +941,16 @@ def extract_edition_from_text(text: str, book_title: str = "") -> str:
     
     SYSTEM ROLE: You are a SINCERE and STOIC extraction robot. 
     CRITICAL RULE: YOU ARE FORBIDDEN FROM GUESSING OR INVENTING YEARS.
+    CRITICAL RULE: A Volume number is NOT an edition. DO NOT return "First Edition" if only "Volume 1" is found.
     CRITICAL RULE: IF NO KEYWORD (Edition, Printing, Revised, Impression, Copyright) IS FOUND, RETURN ONLY: NOT_FOUND
 
     INSTRUCTIONS:
-    1. Extract ONLY the exact phrase (e.g. "Third Edition", "First Printing"). 
-    2. RETURN 'NOT_FOUND' if the information is missing, ambiguous, or only a publication date.
-    3. ABSOLUTELY NO sentences, conversational text, or descriptions.
-    4. NO dates except those explicitly attached to a printing number.
-    5. Max 1-5 words.
+    1. Extract ONLY the exact phrase (e.g. "Third Edition", "First Printing", "Revised & Updated", "Anniversary Edition"). 
+    2. ABSOLUTELY NO binding info (IGNORE 'Hardcover', 'Softcover', etc).
+    3. RETURN 'NOT_FOUND' if the information is missing, ambiguous, or only a publication date.
+    4. ABSOLUTELY NO sentences, conversational text, or descriptions.
+    5. NO dates except those explicitly attached to a printing number.
+    6. Max 1-6 words.
     
     Book title: {book_title}
     Text:

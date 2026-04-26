@@ -41,12 +41,21 @@ except ImportError:
 # Determined if running as a PyInstaller bundle
 def get_app_dir():
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        # If frozen, look in the directory of the executable
+        # AND check _MEIPASS for bundled files
+        exe_dir = os.path.dirname(sys.executable)
+        if hasattr(sys, '_MEIPASS'):
+            # Bundle root (internal)
+            return sys._MEIPASS
+        return exe_dir
     return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_app_dir()
-# ─── Load Environment ────────────────────────────────────────────────────────
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+# Prefer external .env if it exists next to the EXE, else use internal
+exe_env = os.path.join(os.path.dirname(sys.executable), ".env")
+internal_env = os.path.join(BASE_DIR, ".env")
+env_path = exe_env if os.path.exists(exe_env) else internal_env
+load_dotenv(env_path)
 
 # ─── Assets/Icons Pathing ───────────────────────────────────────────────────────
 # For icons/resources, we use __file__ because they are usually BUNDLED INSIDE the EXE
@@ -249,7 +258,13 @@ class DBConnector:
                 self.connected = True
                 return True, f"Connected to MongoDB — DB: '{self.db_name}'"
             except Exception as e:
-                last_error = str(e)
+                # USER REQUEST: Handle network errors gracefully with a friendly message.
+                detailed_err = str(e)
+                if "topology" in detailed_err.lower() or "timeout" in detailed_err.lower() or "reachable" in detailed_err.lower():
+                    last_error = "Network Error: Could not reach MongoDB. Please check your internet connection."
+                else:
+                    last_error = detailed_err
+                
                 if attempt < max_retries:
                     time.sleep(1.5) # Wait before retry
                 continue
@@ -347,6 +362,7 @@ class SyncApp(ctk.CTk):
         self.row_order     = []   # insertion order for rows
         self._folder_selected_session = False
         self.current_user = None
+        self._session_token = None # Persistent ONLY within this session (Memory-only)
 
         self._load_config()
         self._build_ui()
@@ -602,13 +618,13 @@ class SyncApp(ctk.CTk):
         self._conn_icon_grey  = _mk_icon(gy) or None
         self._conn_icon_red   = _mk_icon(r)  or None
 
-        self.conn_icon = ctk.CTkLabel(self.conn_badge,
-                                      text="" if self._conn_icon_grey else "!",
-                                      image=self._conn_icon_grey,
-                                      font=ctk.CTkFont(family="Inter", size=self.F["label"], weight="bold"),
-                                      text_color=C["s_skip_fg"])
-        self._reg(self.conn_icon, 13, "Inter", "bold")
-        self.conn_icon.pack(side="left", padx=(10, 6))
+        self.icon_img_lbl = ctk.CTkLabel(self.conn_badge, text="", image=self._conn_icon_grey)
+        self.icon_txt_lbl = ctk.CTkLabel(self.conn_badge, text="!",
+                                       font=ctk.CTkFont(family="Inter", size=self.F["label"], weight="bold"),
+                                       text_color=C["s_skip_fg"])
+        self._reg(self.icon_txt_lbl, 13, "Inter", "bold")
+        # Initially show grey icon
+        self.icon_img_lbl.pack(side="left", padx=(10, 6))
 
         # --- Connection Spinner (Circular Loader) ---
         self.conn_spinner_canvas = Canvas(self.conn_badge, width=20, height=20, bd=0, 
@@ -641,12 +657,25 @@ class SyncApp(ctk.CTk):
                       text_color=C["muted"],
                       hover_color="#F5F5F5",
                       font=ctk.CTkFont(size=self.F["heading"]),
-                      command=self._check_models_manual), 16, "Inter", "normal").pack(side="left")
+                      command=self._check_models_manual), 16, "Inter", "normal").pack(side="left", padx=(0, 8))
+
+        self.btn_stop = ctk.CTkButton(right, text="⏹", width=self._px(36), height=self._px(36),
+                                      corner_radius=self._px(18),
+                                      fg_color="transparent",
+                                      border_width=1, border_color=C["border"],
+                                      text_color=C["s_fail_fg"],
+                                      hover_color="#FDE8E8", # Light red hover
+                                      font=ctk.CTkFont(size=self.F["heading"]),
+                                      command=self._stop_sync)
+        self.btn_stop.pack(side="left")
+        self.btn_stop.configure(state="disabled")
 
     def _set_conn_visual(self, state, msg=None):
         try:
-            self.conn_icon.configure(image=None, text="")
-            # Hide spinner and stop animation by default
+            # Hide both status widgets initially
+            self.icon_img_lbl.pack_forget()
+            self.icon_txt_lbl.pack_forget()
+            
             if hasattr(self, "conn_spinner_canvas"):
                 self.conn_spinner_canvas.pack_forget()
                 if self._conn_spinner_state.get("job"):
@@ -659,62 +688,58 @@ class SyncApp(ctk.CTk):
         if state == "neutral":
             self.conn_badge.configure(fg_color=C["s_skip_bg"]) 
             self.conn_text.configure(text="Token Required", text_color=C["s_skip_fg"]) 
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            if getattr(self, "_conn_icon_grey", None):
-                self.conn_icon.configure(image=self._conn_icon_grey, text="")
+            img = getattr(self, "_conn_icon_grey", None)
+            if img:
+                self.icon_img_lbl.configure(image=img)
+                self.icon_img_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
             else:
-                self.conn_icon.configure(image=None, text="!", text_color=C["s_skip_fg"]) 
+                self.icon_txt_lbl.configure(text="!", text_color=C["s_skip_fg"])
+                self.icon_txt_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
         elif state == "connecting":
             self.conn_badge.configure(fg_color="#FEF9C3") 
             self.conn_text.configure(text=msg if msg else "Connecting...", text_color="#92400E") 
-            # Hide icon and show spinner
-            self.conn_icon.pack_forget()
             self.conn_spinner_canvas.configure(bg="#FEF9C3")
             self.conn_spinner_canvas.pack(side="left", padx=(10, 6), before=self.conn_text)
             self._spin_conn_loader()
         elif state == "active":
             self.conn_badge.configure(fg_color=C["s_g_bg"]) 
             self.conn_text.configure(text="Active", text_color=C["s_g_fg"]) 
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            if getattr(self, "_conn_icon_green", None):
-                self.conn_icon.configure(image=self._conn_icon_green, text="")
+            img = getattr(self, "_conn_icon_green", None)
+            if img:
+                self.icon_img_lbl.configure(image=img)
+                self.icon_img_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
             else:
-                self.conn_icon.configure(image=None, text="✔", text_color=C["s_g_fg"]) 
-        elif state == "invalid":
+                self.icon_txt_lbl.configure(text="✔", text_color=C["s_g_fg"])
+                self.icon_txt_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
+        elif state in ("invalid", "failed", "offline"):
             self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
-            self.conn_text.configure(text="Invalid Token", text_color=C["s_fail_fg"]) 
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            if getattr(self, "_conn_icon_red", None):
-                self.conn_icon.configure(image=self._conn_icon_red, text="")
+            txt = "Offline" if state == "offline" else ("Invalid Token" if state == "invalid" else "Failed")
+            self.conn_text.configure(text=txt, text_color=C["s_fail_fg"]) 
+            img = getattr(self, "_conn_icon_red", None)
+            if img:
+                self.icon_img_lbl.configure(image=img)
+                self.icon_img_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
             else:
-                self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"]) 
-        elif state == "failed":
-            self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
-            self.conn_text.configure(text="Failed", text_color=C["s_fail_fg"]) 
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            if getattr(self, "_conn_icon_red", None):
-                self.conn_icon.configure(image=self._conn_icon_red, text="")
-            else:
-                self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"]) 
-        elif state == "offline":
-            self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
-            self.conn_text.configure(text="Offline", text_color=C["s_fail_fg"]) 
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            if getattr(self, "_conn_icon_red", None):
-                self.conn_icon.configure(image=self._conn_icon_red, text="")
-            else:
-                self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"])
+                self.icon_txt_lbl.configure(text="!", text_color=C["s_fail_fg"])
+                self.icon_txt_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
         elif state == "idle":
             self.conn_badge.configure(fg_color="#F3F4F6")
             self.conn_text.configure(text="Idle", text_color="#6B7280")
-            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
-            self.conn_icon.configure(image=self._conn_icon_grey or self._conn_icon_green, text="")
+            img = getattr(self, "_conn_icon_grey", None) or getattr(self, "_conn_icon_green", None)
+            if img:
+                self.icon_img_lbl.configure(image=img)
+                self.icon_img_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
+            else:
+                self.icon_txt_lbl.configure(text="", text_color="#6B7280")
+                self.icon_txt_lbl.pack(side="left", padx=(10, 6), before=self.conn_text)
 
     def _spin_conn_loader(self):
         if not self.winfo_exists() or not self.conn_spinner_canvas.winfo_exists():
             return
         self._conn_spinner_state["angle"] = (self._conn_spinner_state["angle"] + 20) % 360
         self.conn_spinner_canvas.itemconfigure(self.conn_spinner_arc, start=self._conn_spinner_state["angle"])
+        try: self.conn_spinner_canvas.tk_raise()
+        except: pass
         self._conn_spinner_state["job"] = self.after(30, self._spin_conn_loader)
 
     def _check_models_on_start(self):
@@ -742,6 +767,29 @@ class SyncApp(ctk.CTk):
         self._set_conn_visual("connecting")
         def _task():
             ok, msg, missing = model_manager.health_check()
+            # 2. Proactive Reconnection: If we have a verified token in this session, ensure we are connected
+            token = self._session_token
+            if ok and token:
+                if not self.db_connector:
+                    uri = (os.environ.get("MONGO_URI") or 
+                           self.config.get("mongo_uri") or 
+                           "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test").strip()
+                    self.db_connector = DBConnector(uri, self.config.get("db_name", "Test"))
+                
+                # Force a ping to get the true connection state
+                self.db_connector.ping()
+                
+                if ok and not self.db_connector.connected:
+                    # Try a fresh connect if ping failed
+                    try:
+                        cok, _ = self.db_connector.connect()
+                        if cok:
+                            u = self.db_connector.find_user_by_token(token)
+                            if u and self.winfo_exists():
+                                self.current_user = {"id": str(u.get("_id")), "username": u.get("username", "")}
+                    except:
+                        pass
+
             if self.winfo_exists():
                 self.after(0, lambda: self._on_health_check_manual_done(ok, msg, missing))
         threading.Thread(target=_task, daemon=True).start()
@@ -750,7 +798,12 @@ class SyncApp(ctk.CTk):
         if not self.winfo_exists(): return
         if ok:
             messagebox.showinfo("Health Check", "All systems active!")
-            self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "neutral")
+            # If we have a session token, we should be active. 
+            has_token = bool(self._session_token)
+            if has_token:
+                self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "offline")
+            else:
+                self._set_conn_visual("neutral")
         else:
             ans = messagebox.askyesno("Health Check Result", f"Issues found:\n\n{msg}\n\nTry to fix/download?")
             if ans:
@@ -1249,9 +1302,8 @@ class SyncApp(ctk.CTk):
                 
                 # --- Fix 10: Non-blocking Open ---
                 def _fetch_and_open():
-                    # Set waiting cursor and status
+                    # Set waiting cursor
                     self.after(0, lambda: self.configure(cursor="watch"))
-                    self.after(0, lambda: self._set_conn_visual("connecting", "Opening Details..."))
                     
                     try:
                         doc = self.db_connector.db[coll].find_one({"book_id": book_id}) if (self.db_connector and self.db_connector.connected) else None
@@ -1260,8 +1312,6 @@ class SyncApp(ctk.CTk):
                         self.after(0, lambda: _create_window(None))
                     finally:
                         self.after(0, lambda: self.configure(cursor=""))
-                        # Restore connection status
-                        self.after(0, lambda: self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "neutral"))
 
                 def _create_window(doc):
                     # DEBOUNCE: Check again if already open
@@ -1330,27 +1380,6 @@ class SyncApp(ctk.CTk):
             #     except Exception:
             #         pass
             
-            def _toggle_info():
-                if info_var.get():
-                    info.grid_remove()
-                    toggle_btn.configure(text="Show Info")
-                    info_var.set(False)
-                    # When info is hidden, use balanced padding for centering
-                    preview.grid_configure(padx=12)
-                else:
-                    info.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
-                    toggle_btn.configure(text="Hide Info")
-                    info_var.set(True)
-                    # Restore sidebar padding
-                    preview.grid_configure(padx=(12, 6))
-
-                win.zoom_factor = 1.0
-                _sync_detail_split()
-                # Force layout calculation before redrawing image to avoid "jatka"
-                win.update_idletasks()
-                if hasattr(win, "_render_main_cmd"):
-                    win._render_main_cmd()
-
             def _on_mouse_wheel(event):
                 px, py = win.winfo_pointerx(), win.winfo_pointery()
 
@@ -1401,11 +1430,6 @@ class SyncApp(ctk.CTk):
             win.bind("<Button-4>", _on_mouse_wheel, add="+")
             win.bind("<Button-5>", _on_mouse_wheel, add="+")
 
-            toggle_btn = ctk.CTkButton(topbar, text="Hide Info", height=40, corner_radius=10,
-                                       font=ctk.CTkFont(family="Inter", size=self.F["btn"], weight="bold"),
-                                       fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
-                                       command=_toggle_info)
-            toggle_btn.pack(side="left", padx=16)
             ctk.CTkButton(topbar, text="Close", height=42, corner_radius=12,
                           font=ctk.CTkFont(family="Inter", size=self.F["btn"], weight="bold"),
                           fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
@@ -1510,24 +1534,73 @@ class SyncApp(ctk.CTk):
             def _on_detail_resize(event):
                 # Only handle window resize, ignore child widget Configure events
                 if event.widget != win: return
+                
+                # Immediately show shroud to hide layout jumping
+                if hasattr(win, "_show_shroud"):
+                    win._show_shroud()
+                
                 if win._resize_job: win.after_cancel(win._resize_job)
-                
-                # Show spinner immediately for professional visual feedback
-                if hasattr(win, "_start_detail_spinner"):
-                    win._start_detail_spinner()
-                
                 win._resize_job = win.after(150, _do_detail_resize)
 
             def _do_detail_resize():
                 win._resize_job = None
                 if win.winfo_exists():
+                    win.update_idletasks()
                     _sync_detail_split()
                     _update_status_wrap()
-                    # Re-render main image to fit new dimensions
                     if hasattr(win, "_render_main_cmd"):
                         win._render_main_cmd()
+                    
+                    # Safer check for existing job
+                    final_job = getattr(win, "_final_resize_job", None)
+                    if final_job: win.after_cancel(final_job)
+                    win._final_resize_job = win.after(400, _do_final_detail_pass)
+
+            def _do_final_detail_pass():
+                if win.winfo_exists():
+                    win.update_idletasks()
+                    if hasattr(win, "_render_main_cmd"):
+                        win._render_main_cmd()
+                    # Hide shroud after final stable pass
+                    if hasattr(win, "_hide_shroud"):
+                        win._hide_shroud()
 
             win.bind("<Configure>", _on_detail_resize, add="+")
+
+            # --- Smooth Transition Shroud (to hide layout jitters) ---
+            win._shroud = ctk.CTkFrame(win, fg_color=C["bg"])
+            # Dedicated shroud spinner to avoid TclError with parentage
+            win._shroud_canvas = ctk.CTkCanvas(win._shroud, width=60, height=60,
+                                              bg=C["bg"], highlightthickness=0)
+            win._shroud_angle = 0
+            win._shroud_job = None
+            
+            def _rotate_shroud_spinner():
+                if not win.winfo_exists(): return
+                win._shroud_canvas.delete("all")
+                win._shroud_angle = (win._shroud_angle + 15) % 360
+                win._shroud_canvas.create_arc(5, 5, 55, 55, start=win._shroud_angle, 
+                                             extent=120, outline=C["olive"], width=4, style="arc")
+                win._shroud_job = win.after(40, _rotate_shroud_spinner)
+
+            def _show_shroud():
+                if win.winfo_exists():
+                    win._shroud.place(relx=0, rely=0, relwidth=1, relheight=1)
+                    win._shroud_canvas.place(relx=0.5, rely=0.5, anchor="center")
+                    win._shroud.lift()
+                    try: win._shroud_canvas.tk_raise()
+                    except: pass
+                    _rotate_shroud_spinner()
+
+            def _hide_shroud():
+                if win.winfo_exists():
+                    win._shroud.place_forget()
+                    if win._shroud_job: 
+                        win.after_cancel(win._shroud_job)
+                        win._shroud_job = None
+
+            win._show_shroud = _show_shroud
+            win._hide_shroud = _hide_shroud
 
             # Thumbs: Horizontal Scrollable Frame for 100% stability
             thumbs_scroll = ctk.CTkScrollableFrame(body, orientation="horizontal", 
@@ -1554,7 +1627,13 @@ class SyncApp(ctk.CTk):
                 
                 # Combine size and position to enforce centering immediately
                 win.geometry(f"{ww}x{wh}+{nx}+{ny}")
+                
+                # --- Initial Loader: Show shroud BEFORE deiconify ---
+                if hasattr(win, "_show_shroud"):
+                    win._show_shroud()
+                
                 win.deiconify()
+                win.update() # Force shroud to map and render immediately
                 # Force a full layout pass AFTER deiconify to fix "jumping" glitch
                 win.update()
                 
@@ -1724,6 +1803,8 @@ class SyncApp(ctk.CTk):
                 
                 win._start_detail_spinner = _start_spinner
                 win._stop_detail_spinner = _stop_spinner
+                win._spinner_canvas_ref = spinner_canvas
+                win._first_load_done = False
                 _bind_zoom(main_lbl)
                 _bind_zoom(preview)
 
@@ -2273,6 +2354,13 @@ class SyncApp(ctk.CTk):
                 def _do_render(path, im):
                     if not win.winfo_exists() or (hasattr(win, "_loading_path") and win._loading_path and win._loading_path != path):
                         return
+                    
+                    if not getattr(win, "_first_load_done", True):
+                        win._first_load_done = True
+                        if hasattr(win, "_hide_shroud"):
+                            # Hide initial loader shroud once first image is ready
+                            win.after(100, win._hide_shroud)
+                    
                     win._loading_path = None
                     if hasattr(win, "_stop_detail_spinner"):
                         win._stop_detail_spinner()
@@ -2682,11 +2770,14 @@ class SyncApp(ctk.CTk):
                 messagebox.showinfo("Folder Selected",
                                     f"{mode.title()} folder set. Connect to start syncing.\n{path}")
 
-    def _test_conn(self):
-        token = self.token_entry.get().strip()
+    def _test_conn(self, token=None, silent=False):
+        if token is None:
+            token = self.token_entry.get().strip()
+        
         if not token:
-            messagebox.showerror("Missing Token",
-                                 "Please paste your connection token.")
+            if not silent:
+                messagebox.showerror("Missing Token",
+                                     "Please paste your connection token.")
             return
 
         # Configuration Priority: OS Env (including .env) > JSON Config > Hardcoded Fallback
@@ -2700,8 +2791,9 @@ class SyncApp(ctk.CTk):
             self._save_config()
         
         if not uri:
-            messagebox.showerror("Missing Database URI",
-                                 "Database connection is not configured.")
+            if not silent:
+                messagebox.showerror("Missing Database URI",
+                                     "Database connection is not configured.")
             return
 
         self._set_conn_visual("connecting")
@@ -2716,10 +2808,10 @@ class SyncApp(ctk.CTk):
             if ok:
                 user = conn.find_user_by_token(token)
             if self.winfo_exists():
-                self.after(0, lambda: self._on_connect_done(conn, ok, msg, user, token, dbname))
+                self.after(0, lambda: self._on_connect_done(conn, ok, msg, user, token, dbname, silent=silent))
         threading.Thread(target=_connect_task, daemon=True).start()
 
-    def _on_connect_done(self, conn, ok, msg, user, token, dbname):
+    def _on_connect_done(self, conn, ok, msg, user, token, dbname, silent=False):
         if not self.winfo_exists(): return
         if ok:
             if not user:
@@ -2729,7 +2821,8 @@ class SyncApp(ctk.CTk):
                     self.token_entry.focus_set()
                 except Exception:
                     pass
-                messagebox.showerror("Invalid Token", "Token not found in users collection.")
+                if not silent:
+                    messagebox.showerror("Invalid Token", "Token not found in users collection.")
                 return
             self.db_connector = conn
             self.current_user = {"id": str(user.get("_id")), "username": user.get("username", "")}
@@ -2744,12 +2837,17 @@ class SyncApp(ctk.CTk):
                 pass
             self._set_conn_visual("active")
             self._log(f"✅ Connected → {dbname} as {self.current_user.get('username','user')}")
+            
+            # --- Session-Only Persistence: Save only in memory, NOT to file for security ---
+            self._session_token = token
+
             # Auto-start sync only if user selected a folder in this session
             if self._folder_selected_session and not self.sync_running:
                 self._start_sync()
         else:
             self._set_conn_visual("failed")
-            messagebox.showerror("Connection Failed", msg)
+            if not silent:
+                messagebox.showerror("Connection Failed", msg)
 
     def _save_settings(self):
         self.config["watch_mode"] = self.watch_var.get()
@@ -2792,13 +2890,15 @@ class SyncApp(ctk.CTk):
             
         # --- Fix 11: Async Ollama Check ---
         def _check_ollama_and_start():
-            self.after(0, lambda: self._set_conn_visual("connecting", "Checking AI..."))
+            # USER REQUEST: Do not show 'Checking AI...' in the global connection badge.
+            # This status belongs in the activity table or internal logs.
             try:
                 import ollama
                 ollama.list()
                 self.after(0, _proceed_to_sync)
             except Exception:
-                self.after(0, lambda: self._set_conn_visual("connected"))
+                # Use 'active' instead of 'connected' which is not a valid state
+                self.after(0, lambda: self._set_conn_visual("active"))
                 self._log("⚠️ Warning: Ollama server not responding. AI extraction might fail.")
                 if not messagebox.askyesno("Ollama Missing", 
                     "Ollama is either not installed or not running.\n"
@@ -2808,13 +2908,21 @@ class SyncApp(ctk.CTk):
                 self.after(0, _proceed_to_sync)
 
         def _proceed_to_sync():
-            self._set_conn_visual("connected")
+            self._set_conn_visual("active")
             self.total_ok = self.total_skip = self.total_fail = 0
             self.sync_running = True
+            self.btn_stop.configure(state="normal") # Enable stop button
             self._log("🚀 Sync started!")
             threading.Thread(target=self._worker, daemon=True).start()
 
         threading.Thread(target=_check_ollama_and_start, daemon=True).start()
+
+    def _stop_sync(self):
+        """Request graceful termination of the sync process."""
+        if self.sync_running:
+            self._log("🛑 Stop requested. Finishing current book and exiting...")
+            self.sync_running = False
+            self.btn_stop.configure(state="disabled")
 
     # ── OCR Pipeline Helper ─────────────────────────────────────────────────
     def _process_book_ocr(self, book_id, book_pages, ts):
@@ -2861,7 +2969,7 @@ class SyncApp(ctk.CTk):
             try:
                 # Use normalized log function for isbn_logic
                 res = isbn_logic.process_book(book_id, image_paths, log_fn=self._log)
-                isbn_logic.unload_isbn_reader() # FREE GPU IMMEDIATELY
+                # Optimization: Do NOT unload here, let ocr_pipeline reuse it.
                 
                 if res:
                     official_isbn = res.get("isbn", "N/A")
@@ -3026,19 +3134,26 @@ class SyncApp(ctk.CTk):
                 if target_images:
                     self._log(f"  🧠 Vision LLM checking {len(target_images)} priority pages for edition…")
                     # extract_edition_from_cover iterates through images and returns as soon as validated
-                    edition = ocr_pipeline.extract_edition_from_cover(target_images)
+                    edition = ocr_pipeline.extract_edition_from_cover(target_images, isbn=official_isbn)
+                
+                if not edition:
+                    # FAST FALLBACK: Use Regex on accumulated OCR text before AI
+                    combined_text = "\n".join(ocr_data.get("interior_texts", [])) + "\n" + "\n".join(isbn_ocr_texts)
+                    edition = ocr_pipeline.find_edition_via_regex(combined_text)
+                    if edition:
+                        self._log(f"  ⚡ Fast-Match Edition: {edition}")
                 
                 if not edition:
                     # FALLBACK 1: Use the already-extracted OCR text from MinerU
                     if interior_text.strip():
                         self._log("  🔍 Vision failed → trying text-based edition search (interior text)…")
-                        edition = ocr_pipeline.extract_edition_from_text(interior_text, title_str)
-                    
+                        edition = ocr_pipeline.extract_edition_from_text(interior_text, title_str, isbn=official_isbn)
+                
+                if not edition and isbn_ocr_texts:
                     # FALLBACK 2: Use the ISBN OCR text (copyright page text captured during ISBN phase)
-                    if not edition and isbn_ocr_texts:
-                        combined_isbn_text = "\n".join(isbn_ocr_texts)
-                        self._log("  🔍 Trying text-based edition search (ISBN page text)…")
-                        edition = ocr_pipeline.extract_edition_from_text(combined_isbn_text, title_str)
+                    combined_isbn_text = "\n".join(isbn_ocr_texts)
+                    self._log("  🔍 Trying text-based edition search (ISBN page text)…")
+                    edition = ocr_pipeline.extract_edition_from_text(combined_isbn_text, title_str, isbn=official_isbn)
                     
                     if not edition:
                         self._log("  ⚠️ No edition info found on priority pages.")
@@ -3240,8 +3355,9 @@ class SyncApp(ctk.CTk):
             self.sync_running = False
             if OCR_AVAILABLE:
                 ocr_pipeline.cleanup_gpu()
-            self.after(0, lambda: self._set_conn_visual("idle"))
-            self._log("⏹️ Sync finished.")
+            self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+            self.after(0, lambda: self._set_conn_visual("active")) # Reset status
+            self._log("🏁 Sync finished.")
 
     # ── Logging ────────────────────────────────────────────────────────────────
     def _log(self, msg):
