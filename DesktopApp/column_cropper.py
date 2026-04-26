@@ -1,6 +1,6 @@
 # """
 # Column Cropper
-# ==============@
+# ==============
 # Steps:
 # 1. DocLayout-YOLO  → bboxes
 # 2. Gap Detection   → columns (cluster-based)

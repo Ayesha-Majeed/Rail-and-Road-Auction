@@ -436,12 +436,27 @@ class SyncApp(ctk.CTk):
         self.SB = max(180, int(200 * s))
 
     def _on_resize(self, event=None):
-        """Update padding AND font sizes whenever window is resized."""
+        """Update padding AND font sizes whenever window is resized (debounced)."""
         if event and event.widget is not self:
             return
         new_w = self.winfo_width()
         if new_w < 50:
             return
+        # Skip if width hasn't actually changed (avoids spurious redraws)
+        if new_w == getattr(self, "_last_resize_w", 0):
+            return
+        # Debounce: cancel any pending resize, schedule new one after 150ms
+        if hasattr(self, "_resize_job") and self._resize_job:
+            try:
+                self.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.after(150, lambda: self._do_resize(new_w))
+
+    def _do_resize(self, new_w):
+        """Actual resize logic — runs once after debounce settles."""
+        self._last_resize_w = new_w
+        self._resize_job = None
         # Recompute fonts for new width
         self._compute_fonts(new_w)
         self._win_w = new_w
@@ -458,14 +473,21 @@ class SyncApp(ctk.CTk):
         self._refresh_fonts()
 
     def _refresh_fonts(self):
-        """Update fonts on all registered widgets."""
+        """Update fonts on all registered widgets (only if size changed)."""
         font_map = getattr(self, "_font_registry", {})
+        font_size_cache = getattr(self, "_font_size_cache", {})
         for key, (widget, base_size, family, weight) in list(font_map.items()):
             try:
                 new_size = max(9, int(round(base_size * self._scale)))
+                # Skip if this widget's font size hasn't changed
+                if font_size_cache.get(key) == new_size:
+                    continue
+                font_size_cache[key] = new_size
                 widget.configure(font=ctk.CTkFont(family=family, size=new_size, weight=weight))
             except Exception:
                 font_map.pop(key, None)
+                font_size_cache.pop(key, None)
+        self._font_size_cache = font_size_cache
 
     def _reg(self, widget, base_size, family="Inter", weight="normal"):
         """Register a widget for live font updates on resize."""
@@ -518,8 +540,19 @@ class SyncApp(ctk.CTk):
         self.config = defaults
 
     def _save_config(self):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(self.config, f, indent=2)
+        # --- Fix 12: Threaded Save ---
+        def _task():
+            try:
+                with open(CONFIG_FILE, "w") as f:
+                    json.dump(self.config, f, indent=2)
+                # Also sync important keys to .env for fallback
+                with open(".env", "w") as f:
+                    for k, v in self.config.items():
+                        if v is not None:
+                            f.write(f"{k}={str(v)}\n")
+            except Exception as e:
+                self.after(0, lambda: self._log(f"⚠️ Error saving config: {e}"))
+        threading.Thread(target=_task, daemon=True).start()
 
     # ─── Build UI ─────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -576,6 +609,15 @@ class SyncApp(ctk.CTk):
                                       text_color=C["s_skip_fg"])
         self._reg(self.conn_icon, 13, "Inter", "bold")
         self.conn_icon.pack(side="left", padx=(10, 6))
+
+        # --- Connection Spinner (Circular Loader) ---
+        self.conn_spinner_canvas = Canvas(self.conn_badge, width=20, height=20, bd=0, 
+                                        highlightthickness=0, bg=C["s_skip_bg"])
+        self.conn_spinner_arc = self.conn_spinner_canvas.create_arc(3, 3, 17, 17, start=0, 
+                                                                  extent=280, style="arc", 
+                                                                  outline="#92400E", width=3)
+        self._conn_spinner_state = {"angle": 0, "job": None}
+
         self.conn_text = ctk.CTkLabel(self.conn_badge, text="Token Required",
                                       font=ctk.CTkFont(family="Inter", size=self.F["label"], weight="bold"),
                                       text_color=C["s_skip_fg"])
@@ -601,28 +643,39 @@ class SyncApp(ctk.CTk):
                       font=ctk.CTkFont(size=self.F["heading"]),
                       command=self._check_models_manual), 16, "Inter", "normal").pack(side="left")
 
-    def _set_conn_visual(self, state):
+    def _set_conn_visual(self, state, msg=None):
         try:
             self.conn_icon.configure(image=None, text="")
+            # Hide spinner and stop animation by default
+            if hasattr(self, "conn_spinner_canvas"):
+                self.conn_spinner_canvas.pack_forget()
+                if self._conn_spinner_state.get("job"):
+                    try: self.after_cancel(self._conn_spinner_state["job"])
+                    except: pass
+                    self._conn_spinner_state["job"] = None
         except Exception:
             pass
+
         if state == "neutral":
             self.conn_badge.configure(fg_color=C["s_skip_bg"]) 
             self.conn_text.configure(text="Token Required", text_color=C["s_skip_fg"]) 
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
             if getattr(self, "_conn_icon_grey", None):
                 self.conn_icon.configure(image=self._conn_icon_grey, text="")
             else:
                 self.conn_icon.configure(image=None, text="!", text_color=C["s_skip_fg"]) 
         elif state == "connecting":
             self.conn_badge.configure(fg_color="#FEF9C3") 
-            self.conn_text.configure(text="Connecting...", text_color="#92400E") 
-            if getattr(self, "_conn_icon_grey", None):
-                self.conn_icon.configure(image=self._conn_icon_grey, text="")
-            else:
-                self.conn_icon.configure(image=None, text="!", text_color="#92400E") 
+            self.conn_text.configure(text=msg if msg else "Connecting...", text_color="#92400E") 
+            # Hide icon and show spinner
+            self.conn_icon.pack_forget()
+            self.conn_spinner_canvas.configure(bg="#FEF9C3")
+            self.conn_spinner_canvas.pack(side="left", padx=(10, 6), before=self.conn_text)
+            self._spin_conn_loader()
         elif state == "active":
             self.conn_badge.configure(fg_color=C["s_g_bg"]) 
             self.conn_text.configure(text="Active", text_color=C["s_g_fg"]) 
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
             if getattr(self, "_conn_icon_green", None):
                 self.conn_icon.configure(image=self._conn_icon_green, text="")
             else:
@@ -630,6 +683,7 @@ class SyncApp(ctk.CTk):
         elif state == "invalid":
             self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
             self.conn_text.configure(text="Invalid Token", text_color=C["s_fail_fg"]) 
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
             if getattr(self, "_conn_icon_red", None):
                 self.conn_icon.configure(image=self._conn_icon_red, text="")
             else:
@@ -637,6 +691,7 @@ class SyncApp(ctk.CTk):
         elif state == "failed":
             self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
             self.conn_text.configure(text="Failed", text_color=C["s_fail_fg"]) 
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
             if getattr(self, "_conn_icon_red", None):
                 self.conn_icon.configure(image=self._conn_icon_red, text="")
             else:
@@ -644,13 +699,33 @@ class SyncApp(ctk.CTk):
         elif state == "offline":
             self.conn_badge.configure(fg_color=C["s_fail_bg"]) 
             self.conn_text.configure(text="Offline", text_color=C["s_fail_fg"]) 
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
             if getattr(self, "_conn_icon_red", None):
                 self.conn_icon.configure(image=self._conn_icon_red, text="")
             else:
-                self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"]) 
+                self.conn_icon.configure(image=None, text="!", text_color=C["s_fail_fg"])
+        elif state == "idle":
+            self.conn_badge.configure(fg_color="#F3F4F6")
+            self.conn_text.configure(text="Idle", text_color="#6B7280")
+            self.conn_icon.pack(side="left", padx=(10, 6), before=self.conn_text)
+            self.conn_icon.configure(image=self._conn_icon_grey or self._conn_icon_green, text="")
+
+    def _spin_conn_loader(self):
+        if not self.winfo_exists() or not self.conn_spinner_canvas.winfo_exists():
+            return
+        self._conn_spinner_state["angle"] = (self._conn_spinner_state["angle"] + 20) % 360
+        self.conn_spinner_canvas.itemconfigure(self.conn_spinner_arc, start=self._conn_spinner_state["angle"])
+        self._conn_spinner_state["job"] = self.after(30, self._spin_conn_loader)
 
     def _check_models_on_start(self):
-        ok, msg, missing = model_manager.health_check()
+        def _task():
+            ok, msg, missing = model_manager.health_check()
+            if self.winfo_exists():
+                self.after(0, lambda: self._on_health_check_start_done(ok, msg, missing))
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _on_health_check_start_done(self, ok, msg, missing):
+        if not self.winfo_exists(): return
         if not ok:
             if any(m == "yolo" or m.startswith("ollama:") for m in missing):
                 ans = messagebox.askyesno("AI Models Missing", 
@@ -665,7 +740,14 @@ class SyncApp(ctk.CTk):
 
     def _check_models_manual(self):
         self._set_conn_visual("connecting")
-        ok, msg, missing = model_manager.health_check()
+        def _task():
+            ok, msg, missing = model_manager.health_check()
+            if self.winfo_exists():
+                self.after(0, lambda: self._on_health_check_manual_done(ok, msg, missing))
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _on_health_check_manual_done(self, ok, msg, missing):
+        if not self.winfo_exists(): return
         if ok:
             messagebox.showinfo("Health Check", "All systems active!")
             self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "neutral")
@@ -818,9 +900,13 @@ class SyncApp(ctk.CTk):
                      justify="left", anchor="w"), 14, "Outfit", "normal")
         token_desc.grid(row=1, column=0, sticky="ew", pady=(0, 16))
 
+        _token_last_w = [0]
         def _token_wrap(e=None):
             try:
-                token_desc.configure(wraplength=max(220, inner.winfo_width() - 24))
+                w = inner.winfo_width()
+                if w == _token_last_w[0]: return
+                _token_last_w[0] = w
+                token_desc.configure(wraplength=max(220, w - 24))
             except Exception:
                 pass
 
@@ -959,11 +1045,15 @@ class SyncApp(ctk.CTk):
                                   command=self._browse_manual)
             m_btn.grid(row=3, column=0, sticky="w", pady=(12, 0))
 
+        _wrap_last_w = [0]
         def _update_wrap(e=None):
             try:
-                w = max(140, cf.winfo_width() - 48)
-                _title_lbl.configure(wraplength=w)
-                _desc_lbl.configure(wraplength=w)
+                w = cf.winfo_width()
+                if w == _wrap_last_w[0]: return
+                _wrap_last_w[0] = w
+                wl = max(140, w - 48)
+                _title_lbl.configure(wraplength=wl)
+                _desc_lbl.configure(wraplength=wl)
             except Exception:
                 pass
         cf.bind("<Configure>", _update_wrap, add="+")
@@ -1156,25 +1246,50 @@ class SyncApp(ctk.CTk):
 
             try:
                 coll = self.config.get("collection", "Book Data")
-                # Use a small wait/after to ensure UI responsiveness if needed,
-                # but for simplicity we keep it here for now as it's a single read.
-                doc = self.db_connector.db[coll].find_one({"book_id": book_id}) if (self.db_connector and self.db_connector.connected) else None
-            except Exception:
-                doc = None
+                
+                # --- Fix 10: Non-blocking Open ---
+                def _fetch_and_open():
+                    # Set waiting cursor and status
+                    self.after(0, lambda: self.configure(cursor="watch"))
+                    self.after(0, lambda: self._set_conn_visual("connecting", "Opening Details..."))
+                    
+                    try:
+                        doc = self.db_connector.db[coll].find_one({"book_id": book_id}) if (self.db_connector and self.db_connector.connected) else None
+                        self.after(0, lambda: _create_window(doc))
+                    except Exception:
+                        self.after(0, lambda: _create_window(None))
+                    finally:
+                        self.after(0, lambda: self.configure(cursor=""))
+                        # Restore connection status
+                        self.after(0, lambda: self._set_conn_visual("active" if self.db_connector and self.db_connector.connected else "neutral"))
 
-            # DEBOUNCE: Check if a detail window for this book is already open
-            existing_win = self._detail_windows.get(book_id)
-            if existing_win and existing_win.winfo_exists():
-                existing_win.focus_set()
-                existing_win.lift()
-                # On some Linux WMs, lift() might not be enough; deiconify helps
-                if existing_win.state() == "iconic":
-                    existing_win.deiconify()
+                def _create_window(doc):
+                    # DEBOUNCE: Check again if already open
+                    if book_id in self._detail_windows:
+                        win = self._detail_windows[book_id]
+                        if win.winfo_exists():
+                            win.focus_set(); win.lift()
+                            if win.state() == "iconic": win.deiconify()
+                            return
+                    
+                    # Store data doc for use in window logic
+                    win = ctk.CTkToplevel(self)
+                    # Force window to be top-level and not hidden by main
+                    win.attributes("-topmost", True)
+                    win.after(100, lambda: win.attributes("-topmost", False))
+                    
+                    self._detail_windows[book_id] = win
+                    # Proceed with window building... (rest of the logic remains same)
+                    _build_window_content(win, doc)
+
+                threading.Thread(target=_fetch_and_open, daemon=True).start()
                 return
 
-            win = ctk.CTkToplevel(self)
-            self._detail_windows[book_id] = win
-            
+            except Exception as e:
+                self._log(f"❌ Error opening detail: {e}")
+
+        # Helper to isolate window content building to avoid deep nesting
+        def _build_window_content(win, doc):
             def _on_close():
                 if book_id in self._detail_windows:
                     del self._detail_windows[book_id]
@@ -1220,13 +1335,19 @@ class SyncApp(ctk.CTk):
                     info.grid_remove()
                     toggle_btn.configure(text="Show Info")
                     info_var.set(False)
+                    # When info is hidden, use balanced padding for centering
+                    preview.grid_configure(padx=12)
                 else:
                     info.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
                     toggle_btn.configure(text="Hide Info")
                     info_var.set(True)
+                    # Restore sidebar padding
+                    preview.grid_configure(padx=(12, 6))
 
                 win.zoom_factor = 1.0
                 _sync_detail_split()
+                # Force layout calculation before redrawing image to avoid "jatka"
+                win.update_idletasks()
                 if hasattr(win, "_render_main_cmd"):
                     win._render_main_cmd()
 
@@ -1357,32 +1478,63 @@ class SyncApp(ctk.CTk):
             status_lbl.grid(row=2, column=0, sticky="ew", padx=12, pady=(0,8))
             win._info_scroll_canvas = None
 
+            _status_last_w = [0]
             def _update_status_wrap(_e=None):
                 try:
-                    status_lbl.configure(wraplength=max(240, win.winfo_width() - 32))
+                    w = win.winfo_width()
+                    if w == _status_last_w[0]: return
+                    _status_last_w[0] = w
+                    status_lbl.configure(wraplength=max(240, w - 32))
                 except Exception:
                     pass
 
+            _detail_last_bw = [0]
             def _sync_detail_split(_e=None):
                 try:
                     bw = max(360, body.winfo_width() - 24)
                 except Exception:
                     return
+                if bw == _detail_last_bw[0]: return
+                _detail_last_bw[0] = bw
                 if info_var.get():
                     left = int(bw * 0.55)
                     left = max(220, min(left, bw - 220))
                     right = max(220, bw - left)
                     body.grid_columnconfigure(0, weight=0, minsize=left)
-                    body.grid_columnconfigure(1, weight=0, minsize=right)
+                    body.grid_columnconfigure(1, weight=1, minsize=right) # Changed col1 to weight 1 when visible
                 else:
-                    body.grid_columnconfigure(0, weight=1, minsize=max(220, bw))
+                    body.grid_columnconfigure(0, weight=1, minsize=bw)
                     body.grid_columnconfigure(1, weight=0, minsize=0)
 
-            win.bind("<Configure>", _update_status_wrap, add="+")
-            body.bind("<Configure>", _sync_detail_split, add="+")
+            win._resize_job = None
+            def _on_detail_resize(event):
+                # Only handle window resize, ignore child widget Configure events
+                if event.widget != win: return
+                if win._resize_job: win.after_cancel(win._resize_job)
+                
+                # Show spinner immediately for professional visual feedback
+                if hasattr(win, "_start_detail_spinner"):
+                    win._start_detail_spinner()
+                
+                win._resize_job = win.after(150, _do_detail_resize)
 
-            thumbs_wrap = ctk.CTkFrame(body, fg_color="transparent")
-            thumbs_wrap.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0,12))
+            def _do_detail_resize():
+                win._resize_job = None
+                if win.winfo_exists():
+                    _sync_detail_split()
+                    _update_status_wrap()
+                    # Re-render main image to fit new dimensions
+                    if hasattr(win, "_render_main_cmd"):
+                        win._render_main_cmd()
+
+            win.bind("<Configure>", _on_detail_resize, add="+")
+
+            # Thumbs: Horizontal Scrollable Frame for 100% stability
+            thumbs_scroll = ctk.CTkScrollableFrame(body, orientation="horizontal", 
+                                                 fg_color="transparent", height=150)
+            thumbs_scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0,12))
+            # body.grid_rowconfigure(1, weight=0) is fine, it will take 'height' from widget
+            
             _sync_detail_split()
             
             # Show window and process images after a short delay to keep UI snappy
@@ -1535,8 +1687,43 @@ class SyncApp(ctk.CTk):
                     return {"book_id": book_id, "page_id": os.path.basename(p), "type": "unknown", "file_name": os.path.basename(p)}
 
                 idx_var = ctk.IntVar(value=0)
+                
+                # Absolute Centering: Label fills entire preview and anchors content to center
                 main_lbl = ctk.CTkLabel(preview, text="", anchor="center")
-                main_lbl.pack(expand=True, fill="both", padx=0, pady=0)
+                main_lbl.place(relx=0, rely=0, relwidth=1, relheight=1)
+                
+                # --- Circular Spinner Overlay ---
+                spinner_canvas = ctk.CTkCanvas(preview, width=60, height=60, 
+                                            bg=C["white"], highlightthickness=0)
+                win._spinner_active = False
+                win._spinner_angle = 0
+                
+                def _start_spinner():
+                    if win._spinner_active: return
+                    win._spinner_active = True
+                    # Spinner stays in absolute middle
+                    spinner_canvas.place(relx=0.5, rely=0.5, anchor="center")
+                    try: 
+                        spinner_canvas.tk_raise()
+                    except: 
+                        pass
+                    _rotate_spinner()
+
+                def _stop_spinner():
+                    win._spinner_active = False
+                    spinner_canvas.place_forget()
+
+                def _rotate_spinner():
+                    if not win.winfo_exists() or not win._spinner_active: return
+                    spinner_canvas.delete("all")
+                    win._spinner_angle = (win._spinner_angle + 15) % 360
+                    # Draw a stylish circular arc spinner
+                    spinner_canvas.create_arc(5, 5, 55, 55, start=win._spinner_angle, 
+                                             extent=120, outline=C["olive"], width=4, style="arc")
+                    win.after(40, _rotate_spinner)
+                
+                win._start_detail_spinner = _start_spinner
+                win._stop_detail_spinner = _stop_spinner
                 _bind_zoom(main_lbl)
                 _bind_zoom(preview)
 
@@ -1607,8 +1794,14 @@ class SyncApp(ctk.CTk):
                 
                 prev_btn = ctk.CTkLabel(preview, text="", image=left_img)
                 next_btn = ctk.CTkLabel(preview, text="", image=right_img)
-                prev_btn.place(relx=0.03, rely=0.5, anchor="w")
-                next_btn.place(relx=0.97, rely=0.5, anchor="e")
+                # Ensure arrows are placed after grid is ready to stay on top
+                def _place_arrows():
+                    prev_btn.place(relx=0.03, rely=0.5, anchor="w")
+                    next_btn.place(relx=0.97, rely=0.5, anchor="e")
+                    prev_btn.lift()
+                    next_btn.lift()
+                
+                _place_arrows()
                 prev_btn.configure(cursor="hand2")
                 next_btn.configure(cursor="hand2")
                 prev_btn.bind("<Enter>", lambda e: prev_btn.configure(image=left_img_h))
@@ -1674,8 +1867,12 @@ class SyncApp(ctk.CTk):
 
                     # Title Badge + Label
                     # --- Dynamic Wrapping Helper ---
+                    _label_last_w = {}
                     def _on_label_resize(event, lbl, padding=48):
                         if event and lbl.winfo_exists():
+                            key = id(lbl)
+                            if _label_last_w.get(key) == event.width: return
+                            _label_last_w[key] = event.width
                             lbl.configure(wraplength=max(120, event.width - padding))
 
 
@@ -1812,8 +2009,11 @@ class SyncApp(ctk.CTk):
                                      )
                         subtitle_lbl.pack(anchor="w", fill="x", pady=(8, 0))
 
+                    _title_card_last_w = [0]
                     def _on_title_resize(e, l=title_lbl, sl=subtitle_lbl):
                         w = e.width - 64
+                        if w == _title_card_last_w[0]: return
+                        _title_card_last_w[0] = w
                         l.configure(wraplength=w)
                         if sl: sl.configure(wraplength=w)
 
@@ -1854,8 +2054,11 @@ class SyncApp(ctk.CTk):
                     desc_lbl.pack(anchor="nw", padx=24, pady=24, fill="both", expand=True)
                     desc_card.bind("<Configure>", lambda e, l=desc_lbl: _on_label_resize(e, l, 64), add="+")
 
+                    _ai_last_w = [0]
                     def _refresh_ai_wrap(_e=None):
                         w = max(220, info.winfo_width() - 72)
+                        if w == _ai_last_w[0]: return
+                        _ai_last_w[0] = w
                         t_size = max(18, min(42, int(w / 12))) # Allow larger title
                         s_size = max(16, min(30, int(t_size * 0.85))) # Allow larger subtitle (up to 30px)
                         d_size = max(15, min(24, int(w / 22))) # Slightly larger description
@@ -1928,8 +2131,11 @@ class SyncApp(ctk.CTk):
                                  justify="left", anchor="w")
                     isbn_lbl.pack(fill="x")
 
+                    _trait_last_w = [0]
                     def _update_trait_wrap(e=None):
                         wv = max(160, traits_card.winfo_width() - 100)
+                        if wv == _trait_last_w[0]: return
+                        _trait_last_w[0] = wv
                         try:
                             author_lbl.configure(wraplength=wv)
                             edition_lbl.configure(wraplength=wv)
@@ -2014,76 +2220,106 @@ class SyncApp(ctk.CTk):
 
                 # --- PIL image cache for instant navigation ---
                 _pil_cache = {}
+                win._loading_path = None
 
                 def _render_main():
                     if not win.winfo_exists(): return
                     i = max(0, min(idx_var.get(), len(paths) - 1))
                     if not paths: return
                     p = paths[i]
+                    
+                    # Pre-cache adjacent images
+                    def _precache():
+                        for offset in [-1, 1]:
+                            ni = i + offset
+                            if 0 <= ni < len(paths):
+                                np = paths[ni]
+                                if np not in _pil_cache:
+                                    try: _pil_cache[np] = Image.open(np)
+                                    except: pass
+
                     bn = os.path.basename(p)
                     status_lbl.configure(text=bn if len(bn) <= 90 else (bn[:89] + "…"))
-                    if PIL_OK:
-                        try:
-                            if p not in _pil_cache:
-                                _pil_cache[p] = Image.open(p)
-                            im = _pil_cache[p]
-                            # Use actual frame dimensions for perfect fit
-                            # If winfo_width is not yet mapped (1), fallback to a proportional estimate
-                            cur_w = preview.winfo_width()
-                            cur_h = preview.winfo_height()
-                            if cur_w < 120 or cur_h < 120:
-                                win.after(40, _render_main)
-                                return
-                            pw = max(320, cur_w - 20)
-                            ph = max(360, cur_h - 20)
-
-                            w, h = im.size
-                            
-                            # Apply zoom factor
-                            zf = getattr(win, "zoom_factor", 1.0)
-                            
-                            if zf > 1.0:
-                                # ZOOM MODE: crop a portion of the original image
-                                # using pan offsets for navigation
-                                crop_w = int(w / zf)
-                                crop_h = int(h / zf)
-                                # Use pan offsets (0.0-1.0) to position the crop window
-                                cx = int(win.pan_x * w)
-                                cy = int(win.pan_y * h)
-                                x1 = max(0, cx - crop_w // 2)
-                                y1 = max(0, cy - crop_h // 2)
-                                # Clamp to image bounds
-                                if x1 + crop_w > w: x1 = w - crop_w
-                                if y1 + crop_h > h: y1 = h - crop_h
-                                x1 = max(0, x1)
-                                y1 = max(0, y1)
-                                x2 = min(w, x1 + crop_w)
-                                y2 = min(h, y1 + crop_h)
-                                cropped = im.crop((x1, y1, x2, y2))
-                                # Fit the cropped portion into the panel
-                                cw, ch = cropped.size
-                                r = min(pw / float(cw), ph / float(ch))
-                                sz = (max(1, int(cw * r)), max(1, int(ch * r)))
-                                img = ctk.CTkImage(light_image=cropped, size=sz)
-                                main_lbl.configure(cursor="fleur")  # Drag cursor when zoomed
-                            else:
-                                # NORMAL MODE: fit whole image to panel
-                                if fit_var.get():
-                                    r = min(pw/float(w), ph/float(h))
-                                else:
-                                    r = min(1.0, min(pw/float(w), ph/float(h)))
-                                sz = (max(1, int(w*r)), max(1, int(h*r)))
-                                img = ctk.CTkImage(light_image=im, size=sz)
-                                main_lbl.configure(cursor="")  # Normal cursor
-                            
-                            main_lbl.configure(image=img)
-                            main_lbl.image = img
-                            main_lbl.configure(text="")
-                        except Exception:
-                            main_lbl.configure(text="Preview unavailable")
-                    else:
+                    
+                    if not PIL_OK:
                         main_lbl.configure(text="Install Pillow for previews (pip install pillow)")
-                    _render_info(p)
+                        return
+
+                    # 1. Check Cache
+                    if p in _pil_cache:
+                        _do_render(p, _pil_cache[p])
+                        threading.Thread(target=_precache, daemon=True).start()
+                        return
+
+                    # 2. Async Load if not in cache
+                    win._loading_path = p
+                    if hasattr(win, "_start_detail_spinner"):
+                        win._start_detail_spinner()
+                    
+                    def _load_task():
+                        try:
+                            im = Image.open(p)
+                            if win.winfo_exists() and win._loading_path == p:
+                                _pil_cache[p] = im
+                                self.after(0, lambda: _do_render(p, im))
+                                _precache()
+                        except Exception as e:
+                            print(f"DEBUG: Failed to load {p}: {e}")
+                            if win.winfo_exists():
+                                self.after(0, lambda: main_lbl.configure(text="Preview unavailable"))
+
+                    threading.Thread(target=_load_task, daemon=True).start()
+
+                def _do_render(path, im):
+                    if not win.winfo_exists() or (hasattr(win, "_loading_path") and win._loading_path and win._loading_path != path):
+                        return
+                    win._loading_path = None
+                    if hasattr(win, "_stop_detail_spinner"):
+                        win._stop_detail_spinner()
+                    try:
+                        # Use actual frame dimensions for perfect fit
+                        cur_w = preview.winfo_width()
+                        cur_h = preview.winfo_height()
+                        if cur_w < 120 or cur_h < 120:
+                            # If still not mapped, try again in a bit
+                            win.after(50, lambda: _do_render(path, im))
+                            return
+                            
+                        pw = max(320, cur_w - 20)
+                        ph = max(360, cur_h - 20)
+                        w, h = im.size
+                        zf = getattr(win, "zoom_factor", 1.0)
+                        
+                        if zf > 1.0:
+                            crop_w = int(w / zf)
+                            crop_h = int(h / zf)
+                            cx = int(win.pan_x * w)
+                            cy = int(win.pan_y * h)
+                            x1 = max(0, cx - crop_w // 2)
+                            y1 = max(0, cy - crop_h // 2)
+                            if x1 + crop_w > w: x1 = w - crop_w
+                            if y1 + crop_h > h: y1 = h - crop_h
+                            x1 = max(0, x1); y1 = max(0, y1)
+                            x2 = min(w, x1 + crop_w); y2 = min(h, y1 + crop_h)
+                            cropped = im.crop((x1, y1, x2, y2))
+                            cw, ch = cropped.size
+                            r = min(pw / float(cw), ph / float(ch))
+                            sz = (max(1, int(cw * r)), max(1, int(ch * r)))
+                            img = ctk.CTkImage(light_image=cropped, size=sz)
+                            main_lbl.configure(cursor="fleur")
+                        else:
+                            if fit_var.get(): r = min(pw/float(w), ph/float(h))
+                            else: r = min(1.0, min(pw/float(w), ph/float(h)))
+                            sz = (max(1, int(w*r)), max(1, int(h*r)))
+                            img = ctk.CTkImage(light_image=im, size=sz)
+                            main_lbl.configure(cursor="")
+                        
+                        main_lbl.configure(image=img, text="")
+                        main_lbl.image = img
+                        _render_info(path)
+                    except Exception as e:
+                        print(f"DEBUG: Render failed: {e}")
+                        main_lbl.configure(text="Preview unavailable")
 
                 # Store refresh command for toggle access
                 win._render_main_cmd = _render_main
@@ -2131,29 +2367,30 @@ class SyncApp(ctk.CTk):
                 def _render_thumbs():
                     if not win.winfo_exists(): return
                     if not thumbs_var.get():
-                        for ch in thumbs_wrap.winfo_children(): ch.destroy()
+                        for ch in thumbs_scroll.winfo_children(): ch.destroy()
                         win.thumb_widgets = []
+                        thumbs_scroll.grid_forget()
                         return
-
+                    
+                    thumbs_scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0,12))
                     new_idx = idx_var.get()
                     
-                    # 1. INITIAL BUILD: Create widgets only if needed
+                    # 1. INITIAL BUILD
                     if not win.thumb_widgets:
-                        for ch in thumbs_wrap.winfo_children(): ch.destroy()
+                        for ch in thumbs_scroll.winfo_children(): ch.destroy()
                         try:
                             from PIL import Image as PILImage
                         except Exception:
                             PILImage = None
                         
-                        thumbs_container = ctk.CTkFrame(thumbs_wrap, fg_color="transparent")
-                        thumbs_container.pack(fill="x", expand=True)
-                        
+                        # Pack into the scrollable frame
+                        # No need for intermediate container
                         for i, p in enumerate(paths[:60]):
                             is_active = (i == new_idx)
-                            cell = ctk.CTkFrame(thumbs_container, fg_color=C["card"] if is_active else "transparent", 
+                            cell = ctk.CTkFrame(thumbs_scroll, fg_color=C["card"] if is_active else "transparent", 
                                                corner_radius=8, border_width=2 if is_active else 0, 
                                                border_color=C["olive"])
-                            cell.grid(row=0, column=i, padx=4, pady=4)
+                            cell.pack(side="left", padx=4, pady=4)
                             
                             if PILImage:
                                 try:
@@ -2217,11 +2454,15 @@ class SyncApp(ctk.CTk):
 
                 if paths:
                     idx_var.set(0)
+                    # Force initial render immediately after paths found
                     _render_main()
                     _render_thumbs()
+                    
                     def _refresh(*_):
-                        _render_main()
-                        _render_thumbs()
+                        # Use a small delay for traces to allow state to settle
+                        win.after(10, _render_main)
+                        win.after(10, _render_thumbs)
+                    
                     fit_var.trace_add("write", _refresh)
                     thumbs_var.trace_add("write", _refresh)
                 else:
@@ -2437,10 +2678,7 @@ class SyncApp(ctk.CTk):
                 if not self.sync_running:
                     self._start_sync()
             else:
-                self.conn_badge.configure(fg_color=C["s_fail_bg"])
-                self.conn_text.configure(text="Offline", text_color=C["s_fail_fg"])
-                if getattr(self, "_conn_icon_red", None):
-                    self.conn_icon.configure(image=self._conn_icon_red)
+                self._set_conn_visual("offline")
                 messagebox.showinfo("Folder Selected",
                                     f"{mode.title()} folder set. Connect to start syncing.\n{path}")
 
@@ -2467,14 +2705,23 @@ class SyncApp(ctk.CTk):
             return
 
         self._set_conn_visual("connecting")
-        self.update()
+        self.update_idletasks()
 
+        # Run DB connection in background to keep UI responsive
         dbname = self.config.get("db_name", "Test")
-        conn   = DBConnector(uri, dbname)
-        ok, msg = conn.connect()
+        def _connect_task():
+            conn = DBConnector(uri, dbname)
+            ok, msg = conn.connect()
+            user = None
+            if ok:
+                user = conn.find_user_by_token(token)
+            if self.winfo_exists():
+                self.after(0, lambda: self._on_connect_done(conn, ok, msg, user, token, dbname))
+        threading.Thread(target=_connect_task, daemon=True).start()
 
+    def _on_connect_done(self, conn, ok, msg, user, token, dbname):
+        if not self.winfo_exists(): return
         if ok:
-            user = conn.find_user_by_token(token)
             if not user:
                 self._set_conn_visual("invalid")
                 try:
@@ -2543,23 +2790,31 @@ class SyncApp(ctk.CTk):
                 f"Syncing is disabled until models are installed.{error_details}")
             return
             
-        # Check if Ollama is running (simple check)
-        try:
-            import ollama
-            # Just test if we can ping the server
-            ollama.list() 
-        except Exception:
-            self._log("⚠️ Warning: Ollama server not responding. AI extraction might fail.")
-            if not messagebox.askyesno("Ollama Missing", 
-                "Ollama is either not installed or not running.\n"
-                "AI extraction (Title, Color, Description) will fail.\n\n"
-                "Continue anyway?"):
-                return
+        # --- Fix 11: Async Ollama Check ---
+        def _check_ollama_and_start():
+            self.after(0, lambda: self._set_conn_visual("connecting", "Checking AI..."))
+            try:
+                import ollama
+                ollama.list()
+                self.after(0, _proceed_to_sync)
+            except Exception:
+                self.after(0, lambda: self._set_conn_visual("connected"))
+                self._log("⚠️ Warning: Ollama server not responding. AI extraction might fail.")
+                if not messagebox.askyesno("Ollama Missing", 
+                    "Ollama is either not installed or not running.\n"
+                    "AI extraction (Title, Color, Description) will fail.\n\n"
+                    "Continue anyway?"):
+                    return
+                self.after(0, _proceed_to_sync)
 
-        self.total_ok = self.total_skip = self.total_fail = 0
-        self.sync_running = True
-        self._log("🚀 Sync started!")
-        threading.Thread(target=self._worker, daemon=True).start()
+        def _proceed_to_sync():
+            self._set_conn_visual("connected")
+            self.total_ok = self.total_skip = self.total_fail = 0
+            self.sync_running = True
+            self._log("🚀 Sync started!")
+            threading.Thread(target=self._worker, daemon=True).start()
+
+        threading.Thread(target=_check_ollama_and_start, daemon=True).start()
 
     # ── OCR Pipeline Helper ─────────────────────────────────────────────────
     def _process_book_ocr(self, book_id, book_pages, ts):
@@ -2600,7 +2855,7 @@ class SyncApp(ctk.CTk):
         if ISBN_LOGIC_AVAILABLE:
             self.after(0, lambda b=book_id, t=ts:
                        self.update_activity_row(b, "Processing", "Searching ISBN…", t))
-            self.after(0, self.update)
+            self.after(0, self.update_idletasks)
             
             self._log(f"  🔍 Checking for ISBN logic for {book_id}…")
             try:
@@ -2674,7 +2929,7 @@ class SyncApp(ctk.CTk):
             # ── Phase 1: YOLO Crop ────────────────────────
             self.after(0, lambda b=book_id, t=ts:
                        self.update_activity_row(b, "Processing", "Cropping…", t))
-            self.after(0, self.update)
+            self.after(0, self.update_idletasks)
             time.sleep(0.2)
             
             self._log(f"  ✂️  Cropping {book_id} ({len(images_to_process)} pages)…")
@@ -2694,7 +2949,7 @@ class SyncApp(ctk.CTk):
             if not description:
                 self.after(0, lambda b=book_id, t=ts:
                            self.update_activity_row(b, "Processing", "OCR…", t))
-                self.after(0, self.update)
+                self.after(0, self.update_idletasks)
                 time.sleep(0.2)
                 
                 self._log(f"  📝 Running OCR on {book_id}…")
@@ -2876,13 +3131,13 @@ class SyncApp(ctk.CTk):
                         # Show this book as Queued first
                         self.after(0, lambda b=book_id, t=ts:
                                    self.update_activity_row(b, "Queued", "Book", t))
-                        self.after(0, self.update)
+                        self.after(0, self.update_idletasks)
                         time.sleep(0.15)
 
                         # Now mark as Processing
                         self.after(0, lambda b=book_id, t=ts:
                                    self.update_activity_row(b, "Processing", "Book", t))
-                        self.after(0, self.update)
+                        self.after(0, self.update_idletasks)
                         time.sleep(0.3)  # Delay for Ubuntu to process the update
 
                         self._log(f"  📖 {book_id}…")
@@ -2895,7 +3150,7 @@ class SyncApp(ctk.CTk):
                                 synced.add(book_id)
                                 self.after(0, lambda b=book_id, t=ts:
                                            self.update_activity_row(b, "Skipped", "Book", t))
-                                self.after(0, self.update)
+                                self.after(0, self.update_idletasks)
                                 time.sleep(0.15)
                                 continue
                         except Exception as e:
@@ -2935,7 +3190,7 @@ class SyncApp(ctk.CTk):
                             # Mark as failed in UI
                             self.after(0, lambda b=book_id, t=ts:
                                        self.update_activity_row(b, "Failed", "No Models", t))
-                            self.after(0, self.update)
+                            self.after(0, self.update_idletasks)
                             continue
 
                         # ── Insert to DB ──────────────────────────────────
@@ -2970,7 +3225,7 @@ class SyncApp(ctk.CTk):
                                        self.update_activity_row(b, "Failed", "No Metadata", t, error_msg=err))
                             continue
 
-                        self.after(0, self.update)
+                        self.after(0, self.update_idletasks)
                         time.sleep(0.15)
 
                     self._log(f"✅ Pass done — OK:{self.total_ok} Skip:{self.total_skip} Fail:{self.total_fail}")
@@ -2985,9 +3240,7 @@ class SyncApp(ctk.CTk):
             self.sync_running = False
             if OCR_AVAILABLE:
                 ocr_pipeline.cleanup_gpu()
-            self.after(0, lambda: self.conn_badge.configure(fg_color="#F3F4F6"))
-            self.after(0, lambda: self.conn_text.configure(text="Idle", text_color="#6B7280"))
-            self.after(0, lambda: self.conn_icon.configure(image=self._conn_icon_grey or self._conn_icon_green))
+            self.after(0, lambda: self._set_conn_visual("idle"))
             self._log("⏹️ Sync finished.")
 
     # ── Logging ────────────────────────────────────────────────────────────────
@@ -3011,7 +3264,9 @@ class SyncApp(ctk.CTk):
                     self.log_box.insert("end", batch)
                     self.log_box.see("end") # Force scroll to bottom for real-time tracking
                     self.log_box.configure(state="disabled")
-                    self.update_idletasks() # Force UI refresh
+                    # Only force UI refresh when log is visible to the user
+                    if self.log_visible:
+                        self.update_idletasks()
                 except Exception as e:
                     print(f"DEBUG: Log box insert failed: {e}")
         
