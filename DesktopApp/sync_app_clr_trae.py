@@ -444,20 +444,24 @@ class SyncApp(ctk.CTk):
 
     def _compute_fonts(self, win_w):
         """
-        Calculate font sizes. On Windows, we use a fixed scale to match the 'perfect' 
-        Linux look, while on Linux we use width-based scaling.
+        Calculate font sizes proportional to window width.
+        Windows: s = width-based only (CTK handles OS scale).
+        Linux:   s = width-based * os_scale.
         """
         import platform
         os_scale = self._get_os_scale()
         
+        # Base scale from width
+        s_base = (win_w / 1280.0)
+        
         if platform.system() == "Windows":
-            # On Windows, 1.0 scale looks perfect because CTK/OS handles the rest.
-            s = 1.0
+            # On Windows, we just use the width scale, but slightly higher baseline
+            s = s_base * 1.05 # 5% fudge factor to feel more 'Linux-like'
         else:
-            # On Linux/other, we use the width-based scaling to achieve that 'perfect' look.
-            s = (win_w / 1280.0) * os_scale
-            s = max(0.85, min(s, 2.0))
+            # On Linux, multiply by our detected OS scale
+            s = s_base * os_scale
             
+        s = max(0.85, min(s, 2.0))
         self._scale = s
 
         def fs(b): return max(11, int(round(b * s)))
@@ -503,7 +507,10 @@ class SyncApp(ctk.CTk):
         self._compute_fonts(new_w)
         self._win_w = new_w
         # Update padding on main sections
-        pad = 450 if new_w > 3000 else max(24, int(new_w * 0.06))
+        # Increase multiplier for Windows significantly to match Linux's wide margins
+        import platform
+        pad_mult = 0.10 if platform.system() == "Windows" else 0.06
+        pad = 450 if new_w > 3000 else max(24, int(new_w * pad_mult))
         for widget_name in ("_dashboard_label", "_cards_frame", "_act_frame_outer"):
             widget = getattr(self, widget_name, None)
             if widget:
@@ -1955,12 +1962,12 @@ class SyncApp(ctk.CTk):
                 if has_ai:
                     # ── AI Results View ──────────────────────────────
                     # Scrollable to handle long content
-                    info_wrap = ctk.CTkFrame(info, fg_color=C["white"])
+                    info_wrap = ctk.CTkFrame(info, fg_color="#F8FAFC")
                     info_wrap.pack(fill="both", expand=True, padx=4, pady=4)
 
                     info_scroll = ctk.CTkScrollableFrame(
                         info_wrap,
-                        fg_color=C["white"],
+                        fg_color="#F8FAFC",
                         scrollbar_fg_color="#E5E7EB",
                         scrollbar_button_color=C["olive_dk"],
                         scrollbar_button_hover_color=C["olive"]
@@ -1990,7 +1997,7 @@ class SyncApp(ctk.CTk):
                             lbl.configure(wraplength=max(120, event.width - padding))
 
 
-                    title_badge_wrap = ctk.CTkFrame(title_hdr, fg_color="#FFFFFF")
+                    title_badge_wrap = ctk.CTkFrame(title_hdr, fg_color="transparent")
                     title_badge_wrap.pack(side="left", padx=24)
 
                     ctk.CTkLabel(title_badge_wrap, text="Ai", width=32, height=32,
@@ -2146,7 +2153,7 @@ class SyncApp(ctk.CTk):
                     desc_hdr.pack_propagate(False)
 
                     # Description Badge + Label
-                    desc_badge_wrap = ctk.CTkFrame(desc_hdr, fg_color="#FFFFFF")
+                    desc_badge_wrap = ctk.CTkFrame(desc_hdr, fg_color="transparent")
                     desc_badge_wrap.pack(side="left", padx=24)
 
                     ctk.CTkLabel(desc_badge_wrap, text="Ai", width=32, height=32,
@@ -2173,12 +2180,22 @@ class SyncApp(ctk.CTk):
 
                     _ai_last_w = [0]
                     def _refresh_ai_wrap(_e=None):
+                        import platform
                         w = max(220, info.winfo_width() - 72)
                         if w == _ai_last_w[0]: return
                         _ai_last_w[0] = w
-                        t_size = max(18, min(42, int(w / 12))) # Allow larger title
-                        s_size = max(16, min(30, int(t_size * 0.85))) # Allow larger subtitle (up to 30px)
-                        d_size = max(15, min(24, int(w / 22))) # Slightly larger description
+                        
+                        # Use width-based scaling just like the main page
+                        s = (info.winfo_width() / 1280.0)
+                        if platform.system() == "Windows":
+                            s *= 1.05 # Match the main page fudge factor
+                        else:
+                            s *= self._get_os_scale()
+                        s = max(0.85, min(s, 1.8)) # Cap slightly lower for detail view
+                        
+                        t_size = max(18, int(32 * s)) 
+                        s_size = max(16, int(24 * s))
+                        d_size = max(14, int(20 * s))
                         
                         title_lbl.configure(wraplength=w, font=ctk.CTkFont(family="Outfit", size=t_size, weight="bold"))
                         if subtitle_lbl:
@@ -2250,13 +2267,24 @@ class SyncApp(ctk.CTk):
 
                     _trait_last_w = [0]
                     def _update_trait_wrap(e=None):
+                        import platform
                         wv = max(160, traits_card.winfo_width() - 100)
                         if wv == _trait_last_w[0]: return
                         _trait_last_w[0] = wv
                         try:
-                            author_lbl.configure(wraplength=wv)
-                            edition_lbl.configure(wraplength=wv)
-                            isbn_lbl.configure(wraplength=wv)
+                            # Scale font size same way as title/description
+                            s = (info.winfo_width() / 1280.0)
+                            if platform.system() == "Windows":
+                                s *= 1.05
+                            else:
+                                s *= self._get_os_scale()
+                            s = max(0.85, min(s, 1.8))
+                            
+                            val_size  = max(14, int(20 * s))  # only for author
+                            
+                            author_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=val_size, weight="bold"))
+                            edition_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=16, weight="bold"))
+                            isbn_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=16, weight="bold"))
                         except Exception:
                             pass
 
@@ -2268,12 +2296,12 @@ class SyncApp(ctk.CTk):
                                  text_color="#9CA3AF").pack(anchor="w", padx=24, pady=12)
 
                 else:
-                    info_wrap = ctk.CTkFrame(info, fg_color=C["white"])
+                    info_wrap = ctk.CTkFrame(info, fg_color="#F8FAFC")
                     info_wrap.pack(fill="both", expand=True, padx=4, pady=4)
 
                     info_scroll = ctk.CTkScrollableFrame(
                         info_wrap,
-                        fg_color=C["white"],
+                        fg_color="#F8FAFC",
                         scrollbar_fg_color="#E5E7EB",
                         scrollbar_button_color=C["olive_dk"],
                         scrollbar_button_hover_color=C["olive"]
