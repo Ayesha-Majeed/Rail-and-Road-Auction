@@ -1328,6 +1328,11 @@ class SyncApp(ctk.CTk):
         self.row_order.append(book_id)
 
         def _open_detail(_e=None):
+            # Check connection first - User request: show "you are offline" if clicked while disconnected
+            if not (self.db_connector and self.db_connector.connected):
+                messagebox.showwarning("Offline", "You are offline. Please connect to view details.")
+                return
+
             # Check current status from badge
             current_status = badge.cget("text")
             
@@ -1729,38 +1734,46 @@ class SyncApp(ctk.CTk):
 
                 unresolved = []
                 paths = []
-                for ent, _ in items:
-                    raw = (ent.get("file_path") or ent.get("file_name") or "").strip()
-                    if raw and os.path.exists(raw):
-                        paths.append(raw)
-                    else:
-                        unresolved.append((ent, raw))
+                
+                # Identify potential search roots from config
+                search_roots = []
+                for key in ("folder_path", "books_path", "slides_path"):
+                    root = (self.config.get(key, "") or "").strip()
+                    if root and os.path.isdir(root) and root not in search_roots:
+                        search_roots.append(root)
 
-                if unresolved and search_roots:
-                    idx_exact = {}
-                    idx_noext = {}
+                # 1. First Pass: Try to resolve items from Doc (if available)
+                if items:
+                    for ent, _ in items:
+                        raw = (ent.get("file_path") or ent.get("file_name") or "").strip()
+                        if raw and os.path.exists(raw):
+                            paths.append(raw)
+                        else:
+                            unresolved.append((ent, raw))
+
+                # 2. Second Pass: If unresolved OR no items (Offline/No Doc), scan filesystem
+                if (unresolved or not items) and search_roots:
+                    # Build index of all files in search roots (smart BFS)
+                    idx_exact = {} # filename.ext -> full path
+                    idx_noext = {} # filename -> full path
                     for root in search_roots:
                         for r, _, files in os.walk(root):
                             for fn in files:
                                 full = os.path.join(r, fn)
                                 lk = fn.lower()
-                                if lk not in idx_exact:
-                                    idx_exact[lk] = full
+                                if lk not in idx_exact: idx_exact[lk] = full
                                 stem = os.path.splitext(lk)[0]
-                                if stem not in idx_noext:
-                                    idx_noext[stem] = full
+                                if stem not in idx_noext: idx_noext[stem] = full
 
+                    # If we have specific items that are unresolved, try to match them
                     for ent, raw in unresolved:
                         candidates = []
                         f_name = (ent.get("file_name") or "").strip()
                         p_id = (ent.get("page_id") or "").strip()
                         raw_base = os.path.basename((raw or "").strip())
-                        if f_name:
-                            candidates.append(f_name)
-                        if raw_base:
-                            candidates.append(raw_base)
-                        if p_id:
-                            candidates.append(p_id)
+                        if f_name: candidates.append(f_name)
+                        if raw_base: candidates.append(raw_base)
+                        if p_id: candidates.append(p_id)
 
                         found = None
                         for cand in candidates:
@@ -1768,25 +1781,21 @@ class SyncApp(ctk.CTk):
                             found = idx_exact.get(lk) or idx_noext.get(os.path.splitext(lk)[0])
                             if found and os.path.exists(found):
                                 break
-
-                        if not found and p_id:
-                            pid = p_id.lower()
-                            for fn_l, full in idx_exact.items():
-                                stem = os.path.splitext(fn_l)[0]
-                                if stem == pid or stem.startswith(pid + "_"):
-                                    found = full
-                                    break
-
-                        if not found and book_id:
-                            bid = str(book_id).lower()
-                            for fn_l, full in idx_exact.items():
-                                stem = os.path.splitext(fn_l)[0]
-                                if stem == bid or stem.startswith(bid + "_"):
-                                    found = full
-                                    break
-
-                        if found and os.path.exists(found):
+                        
+                        if found:
                             paths.append(found)
+
+                    # 3. GLOBAL FALLBACK: If we still have NO paths (or items was empty), 
+                    # find ALL files matching book_id pattern (e.g. 756_001.jpg, 756.jpg)
+                    if not paths:
+                        bid = str(book_id).lower()
+                        for fn_l, full in idx_exact.items():
+                            stem = os.path.splitext(fn_l)[0]
+                            if stem == bid or stem.startswith(bid + "_"):
+                                if os.path.exists(full):
+                                    paths.append(full)
+                        # Sort them naturally so 001 comes before 002
+                        paths.sort()
 
                 if paths:
                     uniq = []
@@ -2049,7 +2058,7 @@ class SyncApp(ctk.CTk):
                         edit_win.wait_visibility()
                         edit_win.grab_set()
 
-                        ctk.CTkLabel(edit_win, text="✏️ Edit Book Title", 
+                        ctk.CTkLabel(edit_win, text="Edit Book Title", 
                                      font=ctk.CTkFont(family="Outfit", size=26, weight="bold"),
                                      text_color="#1E293B").pack(pady=(30, 10))
 
@@ -2062,34 +2071,37 @@ class SyncApp(ctk.CTk):
                         entry.pack(fill="x", padx=20)
                         entry.insert(0, title_lbl.cget("text"))
 
-                        # Subtitle edit row
-                        ctk.CTkLabel(edit_win, text="Subtitle", 
-                                     font=ctk.CTkFont(family="Inter", size=16),
-                                     text_color="#64748B").pack(pady=(10, 5))
-                        
-                        sub_entry_frame = ctk.CTkFrame(edit_win, fg_color="#F8FAFC", corner_radius=12, border_width=1, border_color="#E2E8F0")
-                        sub_entry_frame.pack(fill="x", padx=60, pady=0)
-                        
-                        sub_entry = ctk.CTkEntry(sub_entry_frame, height=50, border_width=0, fg_color="transparent",
-                                                font=ctk.CTkFont(family="Inter", size=18),
-                                                placeholder_text="Type corrected subtitle here...")
-                        sub_entry.pack(fill="x", padx=20)
-                        sub_val = subtitle_lbl.cget("text") if subtitle_lbl else ""
-                        sub_entry.insert(0, sub_val)
+                        sub_entry = None
+                        if subtitle_lbl and subtitle_lbl.cget("text"):
+                            # Subtitle edit row
+                            ctk.CTkLabel(edit_win, text="Subtitle", 
+                                         font=ctk.CTkFont(family="Inter", size=16),
+                                         text_color="#64748B").pack(pady=(10, 5))
+                            
+                            sub_entry_frame = ctk.CTkFrame(edit_win, fg_color="#F8FAFC", corner_radius=12, border_width=1, border_color="#E2E8F0")
+                            sub_entry_frame.pack(fill="x", padx=60, pady=0)
+                            
+                            sub_entry = ctk.CTkEntry(sub_entry_frame, height=50, border_width=0, fg_color="transparent",
+                                                    font=ctk.CTkFont(family="Inter", size=18),
+                                                    placeholder_text="Type corrected subtitle here...")
+                            sub_entry.pack(fill="x", padx=20)
+                            sub_entry.insert(0, subtitle_lbl.cget("text"))
                         
                         entry.focus()
 
                         def _save():
                             val = entry.get().strip()
-                            sub_val = sub_entry.get().strip()
+                            s_val = sub_entry.get().strip() if sub_entry else ""
                             if val:
                                 title_lbl.configure(text=val)
                                 if subtitle_lbl:
-                                    subtitle_lbl.configure(text=sub_val)
+                                    subtitle_lbl.configure(text=s_val)
                                 
                                 if self.db_connector and self.db_connector.connected:
                                     try:
-                                        update_fields = {"title": val, "subtitle": sub_val}
+                                        coll = self.config.get("collection", "Book Data")
+                                        update_fields = {"title": val}
+                                        if sub_entry: update_fields["subtitle"] = s_val
                                         self.db_connector.db[coll].update_one({"book_id": book_id}, {"$set": update_fields})
                                         self._log(f"✅ Title/Subtitle updated for {book_id}")
                                     except Exception as err: self._log(f"❌ DB Update Error: {err}")
@@ -2098,13 +2110,17 @@ class SyncApp(ctk.CTk):
                         btn_row = ctk.CTkFrame(edit_win, fg_color="transparent")
                         btn_row.pack(pady=30)
                         
-                        ctk.CTkButton(btn_row, text="Cancel", width=160, height=50, corner_radius=10,
-                                     fg_color="#FFFFFF", text_color="#667085", hover_color="#E2E8F0",
+                        common_font = ctk.CTkFont(family="Inter", size=18, weight="bold")
+                        
+                        ctk.CTkButton(btn_row, text="Cancel", width=200, height=52, corner_radius=10,
+                                     font=common_font,
+                                     fg_color="#FFFFFF", text_color="#667085", border_width=1, border_color="#E2E8F0",
+                                     hover_color="#E2E8F0",
                                      command=edit_win.destroy).pack(side="left", padx=10)
                                      
-                        ctk.CTkButton(btn_row, text="Save Changes", width=220, height=50, corner_radius=10,
+                        ctk.CTkButton(btn_row, text="Save Changes", width=200, height=52, corner_radius=10,
                                      fg_color="#0F172A", text_color="white", hover_color="#1E293B",
-                                     font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+                                     font=common_font,
                                      command=_save).pack(side="left", padx=10)
                         
                         # Bind Enter key
@@ -2842,8 +2858,11 @@ class SyncApp(ctk.CTk):
                     self._start_sync()
             else:
                 self._set_conn_visual("offline")
-                messagebox.showinfo("Folder Selected",
-                                    f"{mode.title()} folder set. Connect to start syncing.\n{path}")
+                messagebox.showinfo("Folder Linked Successfully",
+                                    f"Success! The {mode.lower()} directory has been mapped and saved.\n\n"
+                                    "To begin the automated OCR pipeline and synchronization, please establish a connection "
+                                    "by verifying your secure token.\n\n"
+                                    f"Selected Path: {path}")
 
     def _test_conn(self, token=None, silent=False):
         if token is None:

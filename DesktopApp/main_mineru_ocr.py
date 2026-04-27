@@ -457,11 +457,12 @@ Rules:
             messages=[{"role": "user", "content": prompt, "images": [image_path]}]
         )
         title = response["message"]["content"].strip()
-        # Clean up AI phrases
-        title = re.sub(r'^(The title is|Title:|Book title:|The book title is|This is)[:\-]?\s*', '', title, flags=re.IGNORECASE).strip()
+        # Clean up AI phrases and formatting
+        title = re.sub(r'[\{\}]', '', title)
+        title = re.sub(r'(?i)^(title|book title|the title|the book title is|this is)[:\-\s]+', '', title).strip()
         # Consolidate multiline titles into one line
         title = " ".join([line.strip() for line in title.split('\n') if line.strip()])
-        title = title.strip('"\'').strip()
+        title = title.strip('"\'').strip(':').strip()
         
         log_done(f'"{title}"')
         return title
@@ -598,7 +599,11 @@ def _sanity_check_author(raw: str) -> str:
     """Reject obviously wrong author responses (orgs, bad AI replies, etc.)."""
     if not raw or not raw.strip():
         return ""
-    s = raw.strip().strip('"').strip("'").strip()
+    
+    # Remove curly braces and common AI labels
+    s = re.sub(r'[\{\}]', '', raw)
+    s = re.sub(r'(?i)^(name|author|human author|the author|by|is)[:\-\s]+', '', s)
+    s = s.strip().strip('"').strip("'").strip(':').strip()
     up = s.upper()
 
     bad_exact = {
@@ -653,22 +658,31 @@ def generate_description(interior_text: str, title: str = "") -> str:
     if not interior_text.strip():
         return ""
     log_progress(f"Generating description via {VISION_MODEL}")
-    
-    prompt = f"""Write a strictly 1-2 line direct description of this book based on the provided text.
-Title: {title}
-Text: {interior_text[:4000]}
-Rules: 
-1. Provide ONLY the description text (maximum 2 sentences). 
-2. ABSOLUTELY NO introductory phrases (e.g., "This book is...", "Here is a description...", "The text describes...").
-3. Start IMMEDIATELY with the subject matter.
-4. DO NOT include headers like "Summary:" or "Description:".
-5. Be professional and concise. One paragraph only."""
-    
+
+    title_hint = f'Book title: "{title}"' if title else ""
+    prompt = f"""You are an expert auction cataloguer. Your job is to write a sharp, accurate 1-2 sentence description of a book for an auction listing.
+
+{title_hint}
+Book text excerpt:
+{interior_text[:4000]}
+
+INSTRUCTIONS:
+1. Write EXACTLY 1-2 sentences — no more, no less.
+2. Describe what the book is ABOUT: its core topic, era, or subject matter.
+3. Mention specific details (e.g. railroad name, time period, geographic area, type of content — photos, maps, roster, history) where visible in the text.
+4. Do NOT start with phrases like "This book", "The book", "Here is", "This is", or "A description of".
+5. Do NOT include headers (e.g. "Summary:", "Description:").
+6. Write in a professional, direct, factual tone suitable for an auction catalog.
+7. Output ONLY the description. Nothing else."""
+
     try:
         response = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
         desc = response["message"]["content"].strip()
-        # Clean up any potential AI intro meta-talk if it still slips through
-        desc = re.sub(r'^(Here is|This is|A summary of|Description:).*?[:\-]\s*', '', desc, flags=re.IGNORECASE).strip()
+        # Strip any lingering AI preamble
+        desc = re.sub(
+            r'^(Here is|This is|A summary of|Description:|Summary:|The book|This book)[^\n]*[:\-]?\s*',
+            '', desc, flags=re.IGNORECASE
+        ).strip()
         log_done("done")
         return desc
     except Exception as e:
@@ -676,21 +690,33 @@ Rules:
         return ""
 
 def generate_description_from_images(image_paths: list, title: str = "") -> str:
-    """Fallback: Generates description by sending images directly to Vision LLM."""
-    valid_paths = [p for p in image_paths if p and os.path.exists(p)]
+    """Fallback: Generates description from interior book pages only (skips covers) via Vision LLM."""
+    # Skip the first 2 pages (front/back covers) — use only interior pages for description
+    interior_paths = image_paths[2:] if len(image_paths) > 2 else image_paths
+    valid_paths = [p for p in interior_paths if p and os.path.exists(p)]
+    # If no interior pages, fall back to all pages
+    if not valid_paths:
+        valid_paths = [p for p in image_paths if p and os.path.exists(p)]
     if not valid_paths:
         return ""
 
-    log_progress(f"Generating description from images via {VISION_MODEL}")
-    
-    prompt = f"""Read the text on these book pages and write a strictly 1-2 line direct description of the book's content.
-Title: {title}
-Rules:
-1. Use ONLY the text visible on the pages.
-2. Provide ONLY the description text (maximum 2 sentences).
-3. ABSOLUTELY NO introductory phrases (e.g., "This book is...", "Here is a description...").
-4. Start IMMEDIATELY with the subject matter.
-5. DO NOT include headers like "Summary:" or "Description:". """
+    log_progress(f"Generating description from {len(valid_paths)} interior page(s) via {VISION_MODEL}")
+
+    title_hint = f'Book title: "{title}"' if title else ""
+    prompt = f"""You are an expert auction cataloguer. Your job is to write a sharp, accurate 1-2 sentence description of a book for an auction listing.
+
+{title_hint}
+These images show interior pages of a book.
+
+INSTRUCTIONS:
+1. Read the visible text on these interior pages carefully.
+2. Write EXACTLY 1-2 sentences — no more, no less.
+3. Describe what the book is ABOUT: its core topic, era, or subject matter.
+4. Mention specific details (e.g. railroad name, time period, geographic area, type of content — photos, maps, roster, history) where visible.
+5. Do NOT start with phrases like "This book", "The book", "Here is", "This is", or "A description of".
+6. Do NOT include headers (e.g. "Summary:", "Description:").
+7. Write in a professional, direct, factual tone suitable for an auction catalog.
+8. Output ONLY the description. Nothing else."""
 
     try:
         response = ollama.chat(
@@ -698,7 +724,10 @@ Rules:
             messages=[{"role": "user", "content": prompt, "images": valid_paths[:3]}]
         )
         desc = response["message"]["content"].strip()
-        desc = re.sub(r'^(Here is|This is|A summary of|Description:).*?[:\-]\s*', '', desc, flags=re.IGNORECASE).strip()
+        desc = re.sub(
+            r'^(Here is|This is|A summary of|Description:|Summary:|The book|This book)[^\n]*[:\-]?\s*',
+            '', desc, flags=re.IGNORECASE
+        ).strip()
         log_done("done")
         return desc
     except Exception as e:
@@ -713,6 +742,11 @@ def _sanity_check_edition(raw: str) -> str:
     # Handle escaped variants like NOT\_FOUND
     s = raw.replace('\\', '').strip().strip('"').strip("'").strip()
     up = s.upper()
+
+    # NEW STRICT RULE: Reject lone 4-digit years (e.g. 1985) or digit-only strings
+    if re.fullmatch(r'\d{4}', s) or s.isdigit():
+        return ""
+
 
     # STRICT BLACKLIST (Ignore binding formats/formats even if they contain the word "Edition")
     blacklist = ["HARD COVER", "SOFT COVER", "SOFTCOVER", "HARDCOVER", "PAPERBACK", "CLOTH", "LEATHER", "PLASTIC", "WRAPPER", "BOUND"]
@@ -942,7 +976,7 @@ def extract_edition_from_text(text: str, book_title: str = "", isbn: str = "") -
     SYSTEM ROLE: You are a SINCERE and STOIC extraction robot. 
     CRITICAL RULE: YOU ARE FORBIDDEN FROM GUESSING OR INVENTING YEARS.
     CRITICAL RULE: A Volume number is NOT an edition. DO NOT return "First Edition" if only "Volume 1" is found.
-    CRITICAL RULE: IF NO KEYWORD (Edition, Printing, Revised, Impression, Copyright) IS FOUND, RETURN ONLY: NOT_FOUND
+    CRITICAL RULE: IF NO KEYWORD (Edition, Printing, Revised, Impression, Anniversary) IS FOUND, RETURN ONLY: NOT_FOUND
 
     INSTRUCTIONS:
     1. Extract ONLY the exact phrase (e.g. "Third Edition", "First Printing", "Revised & Updated", "Anniversary Edition"). 
@@ -975,8 +1009,11 @@ def save_book_metadata(book_id, title, description, output_folder, edition="", a
     """Saves book metadata as JSON for DB sync."""
     def _clean_val(v, default="Not Found"):
         if not v: return default
-        # Remove backslashes (common in AI escapes)
+        # Remove backslashes, curly braces, and common AI preambles globally
         clean = v.replace('\\', '').strip()
+        clean = re.sub(r'[\{\}]', '', clean)
+        clean = re.sub(r'(?i)^(name|author|title|book title|edition|description|human author|is|was)[:\-\s]+', '', clean)
+        clean = clean.strip().strip('"').strip("'").strip(':').strip()
         if not clean or clean.upper() in ["NOT_FOUND", "NOT FOUND"]:
             return default
         return clean
@@ -1024,12 +1061,15 @@ def stop_ollama():
     # 2. System-Level Kill (Fallback for extreme memory pressure)
     try:
         if platform.system() == "Windows":
-            # Using taskkill /F to force stop blocking processes
-            os.system("taskkill /F /IM ollama_llama_server.exe /T 2>nul >nul")
-            os.system("taskkill /F /IM ollama.exe /T 2>nul >nul")
+            # Using taskkill /F to force stop blocking processes (Hidden on Windows)
+            # CREATE_NO_WINDOW = 0x08000000
+            subprocess.run(["taskkill", "/F", "/IM", "ollama_llama_server.exe", "/T"], 
+                           creationflags=0x08000000, capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "ollama.exe", "/T"], 
+                           creationflags=0x08000000, capture_output=True)
         else:
-            os.system("pkill -9 -f 'ollama_llama_server' 2>/dev/null || true")
-            os.system("pkill -9 -f 'ollama' 2>/dev/null || true")
+            subprocess.run(["pkill", "-9", "-f", "ollama_llama_server"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "ollama"], capture_output=True)
     except: pass
     
     time.sleep(1.0)
@@ -1054,8 +1094,13 @@ def start_ollama():
             return # Already running
     except: pass
 
-    # Start as a background process
-    os.system("ollama serve &>/dev/null &")
+    # Start as a background process (Hidden on Windows)
+    if platform.system() == "Windows":
+        subprocess.Popen(["ollama", "serve"], creationflags=0x08000000, 
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
+                         start_new_session=True)
     time.sleep(3)
 
 def cleanup_intermediate_files(book_crops_dir: str):
