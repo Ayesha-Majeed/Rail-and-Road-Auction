@@ -482,53 +482,72 @@ class SyncApp(ctk.CTk):
 
     def _on_resize(self, event=None):
         """Update padding AND font sizes whenever window is resized (debounced)."""
+        if getattr(self, "_resize_lock", False):
+            return
         if event and event.widget is not self:
             return
+            
         new_w = self.winfo_width()
-        if new_w < 50:
+        if new_w < 100: # Ignore tiny/invalid widths during init/iconify
             return
-        # Skip if width change is tiny (e.g. scrollbar toggle) to prevent jitter
+            
+        # Skip if width change is tiny to prevent jitter/loops
         old_w = getattr(self, "_last_resize_w", 0)
-        if abs(new_w - old_w) < 10:
+        if abs(new_w - old_w) < 15:
             return
-        # Debounce: cancel any pending resize, schedule new one after 300ms
-        # (300ms prevents the hang on Windows maximize which fires many events)
+            
+        # Windows Maximize Handling: Increase debounce to 500ms to let window settle
+        import platform
+        debounce = 500 if platform.system() == "Windows" else 300
+        
         if hasattr(self, "_resize_job") and self._resize_job:
             try:
                 self.after_cancel(self._resize_job)
-            except Exception:
-                pass
-        self._resize_job = self.after(300, lambda: self._do_resize(new_w))
+            except: pass
+            
+        self._resize_job = self.after(debounce, lambda: self._do_resize(new_w))
 
     def _do_resize(self, new_w):
         """Actual resize logic — runs once after debounce settles."""
-        # Double-check width is still valid (window may have changed again)
+        if getattr(self, "_resize_lock", False):
+            return
+            
+        # Double-check width is still valid
         actual_w = self.winfo_width()
         if abs(actual_w - new_w) > 50:
-            new_w = actual_w  # Use the latest width
+            new_w = actual_w
+            
         self._last_resize_w = new_w
         self._resize_job = None
+        
         old_scale = getattr(self, "_scale", 0)
-        # Recompute fonts for new width
+        # Recompute fonts
         self._compute_fonts(new_w)
-        self._win_w = new_w
-        # Skip widget updates if scale hasn't meaningfully changed (prevents hang)
+        
         if abs(self._scale - old_scale) < 0.01:
             return
-        # Update padding on main sections
-        # Increase multiplier for Windows significantly to match Linux's wide margins
-        import platform
-        pad_mult = 0.10 if platform.system() == "Windows" else 0.06
-        pad = 450 if new_w > 3000 else max(24, int(new_w * pad_mult))
-        for widget_name in ("_dashboard_label", "_cards_frame", "_act_frame_outer"):
-            widget = getattr(self, widget_name, None)
-            if widget:
-                try:
-                    widget.grid_configure(padx=pad)
-                except Exception:
-                    pass
-        # Refresh all registered widget fonts
-        self._refresh_fonts()
+            
+        # Start Lock
+        self._resize_lock = True
+        try:
+            self._win_w = new_w
+            # Update padding on main sections
+            import platform
+            pad_mult = 0.10 if platform.system() == "Windows" else 0.06
+            pad = 450 if new_w > 3000 else max(24, int(new_w * pad_mult))
+            
+            for widget_name in ("_dashboard_label", "_cards_frame", "_act_frame_outer"):
+                widget = getattr(self, widget_name, None)
+                if widget:
+                    try: widget.grid_configure(padx=pad)
+                    except: pass
+            
+            # Refresh all registered widget fonts
+            self._refresh_fonts()
+            
+        finally:
+            # Release Lock
+            self._resize_lock = False
 
     def _refresh_fonts(self):
         """Update fonts on all registered widgets (only if size changed)."""
