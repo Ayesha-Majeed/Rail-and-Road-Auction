@@ -412,15 +412,25 @@ class SyncApp(ctk.CTk):
             gdk = _os.environ.get("GDK_SCALE", "").strip()
             try:
                 v = float(gdk)
-                if v >= 1.0: return v
-            except: pass
-            
+                if v >= 1.0:
+                    return v
+            except (ValueError, TypeError):
+                pass
+            # 2. QT_SCALE_FACTOR
+            qt = _os.environ.get("QT_SCALE_FACTOR", "").strip()
+            try:
+                v = float(qt)
+                if v >= 1.0:
+                    return v
+            except (ValueError, TypeError):
+                pass
+            # 3. winfo_fpixels: pixels per inch — 96dpi = 1x, 192dpi = 2x
             try:
                 dpi = self.winfo_fpixels("1i")
                 if dpi > 0:
-                    return max(1.0, round(dpi / 96.0 * 4) / 4)
-            except: pass
-            
+                    return max(1.0, round(dpi / 96.0 * 4) / 4)  # round to nearest 0.25
+            except Exception:
+                pass
         return 1.0
 
     def _debug_scale(self):
@@ -444,7 +454,7 @@ class SyncApp(ctk.CTk):
             # On Windows, 1.0 scale looks perfect because CTK/OS handles the rest.
             s = 1.0
         else:
-            # On Linux, we use the width-based scaling to achieve that 'perfect' look.
+            # On Linux/other, we use the width-based scaling to achieve that 'perfect' look.
             s = (win_w / 1280.0) * os_scale
             s = max(0.85, min(s, 2.0))
             
@@ -473,8 +483,9 @@ class SyncApp(ctk.CTk):
         new_w = self.winfo_width()
         if new_w < 50:
             return
-        # Skip if width hasn't actually changed (avoids spurious redraws)
-        if new_w == getattr(self, "_last_resize_w", 0):
+        # Skip if width change is tiny (e.g. scrollbar toggle) to prevent jitter
+        old_w = getattr(self, "_last_resize_w", 0)
+        if abs(new_w - old_w) < 10:
             return
         # Debounce: cancel any pending resize, schedule new one after 150ms
         if hasattr(self, "_resize_job") and self._resize_job:
@@ -486,11 +497,6 @@ class SyncApp(ctk.CTk):
 
     def _do_resize(self, new_w):
         """Actual resize logic — runs once after debounce settles."""
-        # Optimization: Ignore tiny width changes (e.g. scrollbar appearing) to prevent jitter
-        old_w = getattr(self, "_last_resize_w", 0)
-        if abs(new_w - old_w) < 10:
-            return
-
         self._last_resize_w = new_w
         self._resize_job = None
         # Recompute fonts for new width
@@ -957,7 +963,7 @@ class SyncApp(ctk.CTk):
         card.grid_columnconfigure(0, weight=1)
         card.grid_rowconfigure(0, weight=1)
 
-        inner = ctk.CTkFrame(card, fg_color=C["card"])
+        inner = ctk.CTkFrame(card, fg_color=C["white"])
         inner.grid(row=0, column=0, padx=self._px(19), pady=self._px(27), sticky="ew")
         inner.grid_columnconfigure(0, weight=1)
 
@@ -1556,6 +1562,12 @@ class SyncApp(ctk.CTk):
             def _on_detail_resize(event):
                 # Only handle window resize, ignore child widget Configure events
                 if event.widget != win: return
+
+                new_w = win.winfo_width()
+                old_w = getattr(win, "_last_resize_w", 0)
+                if abs(new_w - old_w) < 10:
+                    return
+                win._last_resize_w = new_w
                 
                 # Immediately show shroud to hide layout jumping
                 if hasattr(win, "_show_shroud"):
