@@ -398,37 +398,29 @@ class SyncApp(ctk.CTk):
 
     def _get_os_scale(self):
         """
-        Detect the OS-level display scale factor on Linux/Ubuntu.
-        On HiDPI / Wayland-scaled desktops the GTK scale env var or
-        winfo_fpixels tell us the real multiplier (1x, 1.5x, 2x, etc.).
+        Detect the OS-level display scale factor.
         Returns a float >= 1.0.
         """
         import platform, os as _os
-        if platform.system() != "Linux":
+        
+        # Windows handles scaling automatically via CTK, so we return 1.0 to avoid double-scaling
+        if platform.system() == "Windows":
             return 1.0
-        # 1. GDK_SCALE env var — set by GNOME/Wayland for integer scaling
-        gdk = _os.environ.get("GDK_SCALE", "").strip()
-        try:
-            v = float(gdk)
-            if v >= 1.0:
-                return v
-        except (ValueError, TypeError):
-            pass
-        # 2. QT_SCALE_FACTOR
-        qt = _os.environ.get("QT_SCALE_FACTOR", "").strip()
-        try:
-            v = float(qt)
-            if v >= 1.0:
-                return v
-        except (ValueError, TypeError):
-            pass
-        # 3. winfo_fpixels: pixels per inch — 96dpi = 1x, 192dpi = 2x
-        try:
-            dpi = self.winfo_fpixels("1i")
-            if dpi > 0:
-                return max(1.0, round(dpi / 96.0 * 4) / 4)  # round to nearest 0.25
-        except Exception:
-            pass
+            
+        # Linux specific (GDK/Wayland) where manual scaling is needed to look 'perfect'
+        if platform.system() == "Linux":
+            gdk = _os.environ.get("GDK_SCALE", "").strip()
+            try:
+                v = float(gdk)
+                if v >= 1.0: return v
+            except: pass
+            
+            try:
+                dpi = self.winfo_fpixels("1i")
+                if dpi > 0:
+                    return max(1.0, round(dpi / 96.0 * 4) / 4)
+            except: pass
+            
         return 1.0
 
     def _debug_scale(self):
@@ -442,14 +434,20 @@ class SyncApp(ctk.CTk):
 
     def _compute_fonts(self, win_w):
         """
-        Calculate font sizes proportional to window width + OS display scale.
-        On Ubuntu HiDPI (GDK_SCALE=2) the window's logical pixel count is
-        already halved by the compositor, so we must multiply fonts back up.
+        Calculate font sizes. On Windows, we use a fixed scale to match the 'perfect' 
+        Linux look, while on Linux we use width-based scaling.
         """
+        import platform
         os_scale = self._get_os_scale()
-        # Scale relative to 1280px design width, then apply OS HiDPI factor
-        s = (win_w / 1280.0) * os_scale
-        s = max(0.85, min(s, 2.0))
+        
+        if platform.system() == "Windows":
+            # On Windows, 1.0 scale looks perfect because CTK/OS handles the rest.
+            s = 1.0
+        else:
+            # On Linux, we use the width-based scaling to achieve that 'perfect' look.
+            s = (win_w / 1280.0) * os_scale
+            s = max(0.85, min(s, 2.0))
+            
         self._scale = s
 
         def fs(b): return max(11, int(round(b * s)))
@@ -475,9 +473,8 @@ class SyncApp(ctk.CTk):
         new_w = self.winfo_width()
         if new_w < 50:
             return
-        # Skip if width change is tiny (e.g. scrollbar toggle) to prevent jitter
-        old_w = getattr(self, "_last_resize_w", 0)
-        if abs(new_w - old_w) < 10:
+        # Skip if width hasn't actually changed (avoids spurious redraws)
+        if new_w == getattr(self, "_last_resize_w", 0):
             return
         # Debounce: cancel any pending resize, schedule new one after 150ms
         if hasattr(self, "_resize_job") and self._resize_job:
@@ -489,6 +486,11 @@ class SyncApp(ctk.CTk):
 
     def _do_resize(self, new_w):
         """Actual resize logic — runs once after debounce settles."""
+        # Optimization: Ignore tiny width changes (e.g. scrollbar appearing) to prevent jitter
+        old_w = getattr(self, "_last_resize_w", 0)
+        if abs(new_w - old_w) < 10:
+            return
+
         self._last_resize_w = new_w
         self._resize_job = None
         # Recompute fonts for new width
@@ -1554,12 +1556,6 @@ class SyncApp(ctk.CTk):
             def _on_detail_resize(event):
                 # Only handle window resize, ignore child widget Configure events
                 if event.widget != win: return
-
-                new_w = win.winfo_width()
-                old_w = getattr(win, "_last_resize_w", 0)
-                if abs(new_w - old_w) < 10:
-                    return
-                win._last_resize_w = new_w
                 
                 # Immediately show shroud to hide layout jumping
                 if hasattr(win, "_show_shroud"):
