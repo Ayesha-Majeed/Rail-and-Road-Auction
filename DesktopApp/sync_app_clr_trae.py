@@ -491,21 +491,30 @@ class SyncApp(ctk.CTk):
         old_w = getattr(self, "_last_resize_w", 0)
         if abs(new_w - old_w) < 10:
             return
-        # Debounce: cancel any pending resize, schedule new one after 150ms
+        # Debounce: cancel any pending resize, schedule new one after 300ms
+        # (300ms prevents the hang on Windows maximize which fires many events)
         if hasattr(self, "_resize_job") and self._resize_job:
             try:
                 self.after_cancel(self._resize_job)
             except Exception:
                 pass
-        self._resize_job = self.after(150, lambda: self._do_resize(new_w))
+        self._resize_job = self.after(300, lambda: self._do_resize(new_w))
 
     def _do_resize(self, new_w):
         """Actual resize logic — runs once after debounce settles."""
+        # Double-check width is still valid (window may have changed again)
+        actual_w = self.winfo_width()
+        if abs(actual_w - new_w) > 50:
+            new_w = actual_w  # Use the latest width
         self._last_resize_w = new_w
         self._resize_job = None
+        old_scale = getattr(self, "_scale", 0)
         # Recompute fonts for new width
         self._compute_fonts(new_w)
         self._win_w = new_w
+        # Skip widget updates if scale hasn't meaningfully changed (prevents hang)
+        if abs(self._scale - old_scale) < 0.01:
+            return
         # Update padding on main sections
         # Increase multiplier for Windows significantly to match Linux's wide margins
         import platform
@@ -525,6 +534,7 @@ class SyncApp(ctk.CTk):
         """Update fonts on all registered widgets (only if size changed)."""
         font_map = getattr(self, "_font_registry", {})
         font_size_cache = getattr(self, "_font_size_cache", {})
+        updated = 0
         for key, (widget, base_size, family, weight) in list(font_map.items()):
             try:
                 new_size = max(9, int(round(base_size * self._scale)))
@@ -533,6 +543,7 @@ class SyncApp(ctk.CTk):
                     continue
                 font_size_cache[key] = new_size
                 widget.configure(font=ctk.CTkFont(family=family, size=new_size, weight=weight))
+                updated += 1
             except Exception:
                 font_map.pop(key, None)
                 font_size_cache.pop(key, None)
@@ -980,7 +991,7 @@ class SyncApp(ctk.CTk):
                      anchor="w"), 16, "Inter", "bold").grid(row=0, column=0, sticky="ew", pady=(0, 8))
 
         token_desc = self._reg(ctk.CTkLabel(inner,
-                     text="Paste the token provided from the web app to securely\nlink this desktop client to your cloud OCR system.",
+                     text="Paste the token provided from the web app to securely link this desktop client to your cloud OCR system.",
                      font=ctk.CTkFont(family="Outfit", size=self._fs(14)),
                      text_color="#000000",
                      justify="left", anchor="w"), 14, "Outfit", "normal")
