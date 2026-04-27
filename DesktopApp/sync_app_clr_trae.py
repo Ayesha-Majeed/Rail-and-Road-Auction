@@ -475,8 +475,9 @@ class SyncApp(ctk.CTk):
         new_w = self.winfo_width()
         if new_w < 50:
             return
-        # Skip if width hasn't actually changed (avoids spurious redraws)
-        if new_w == getattr(self, "_last_resize_w", 0):
+        # Skip if width change is tiny (e.g. scrollbar toggle) to prevent jitter
+        old_w = getattr(self, "_last_resize_w", 0)
+        if abs(new_w - old_w) < 10:
             return
         # Debounce: cancel any pending resize, schedule new one after 150ms
         if hasattr(self, "_resize_job") and self._resize_job:
@@ -1553,6 +1554,12 @@ class SyncApp(ctk.CTk):
             def _on_detail_resize(event):
                 # Only handle window resize, ignore child widget Configure events
                 if event.widget != win: return
+
+                new_w = win.winfo_width()
+                old_w = getattr(win, "_last_resize_w", 0)
+                if abs(new_w - old_w) < 10:
+                    return
+                win._last_resize_w = new_w
                 
                 # Immediately show shroud to hide layout jumping
                 if hasattr(win, "_show_shroud"):
