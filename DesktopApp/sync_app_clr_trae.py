@@ -854,8 +854,9 @@ class SyncApp(ctk.CTk):
     def _on_health_check_manual_done(self, ok, msg, missing, conn_ok=True):
         if not self.winfo_exists(): return
         
-        # Show specific internet error if DB connection failed but models are OK
-        if not conn_ok:
+        # Show specific internet error ONLY if we actually have a DB connector and it failed.
+        # If we don't have a token, we don't care about DB connection here.
+        if not conn_ok and self.db_connector:
             messagebox.showwarning("Connection Error", 
                 "Could not reach the database.\n\nPlease check your internet connection and try again.")
             self._set_conn_visual("offline")
@@ -2191,8 +2192,9 @@ class SyncApp(ctk.CTk):
                     _ai_last_w = [0]
                     def _refresh_ai_wrap(_e=None):
                         import platform
-                        # Ensure we have enough margin to prevent horizontal overflow on Windows
-                        w = max(220, info.winfo_width() - 85)
+                        # Increase margin even more for Windows to ensure no trimming
+                        margin = 120 if platform.system() == "Windows" else 85
+                        w = max(220, info.winfo_width() - margin)
                         if w == _ai_last_w[0]: return
                         _ai_last_w[0] = w
                         
