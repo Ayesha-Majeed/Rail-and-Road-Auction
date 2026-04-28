@@ -51,7 +51,8 @@ jobs:
         --add-data "DesktopApp/isbn_extractor_ui.py;." `
         --collect-all magic-pdf `
         --collect-all easyocr `
-        --collect-all doclayout-yolo `
+        --collect-all doclayout_yolo `
+        --collect-all ultralytics `
         DesktopApp/sync_app_clr_trae.py
     
     - name: Upload Artifact
