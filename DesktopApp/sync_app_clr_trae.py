@@ -364,8 +364,11 @@ class SyncApp(ctk.CTk):
         self._screen_w = sw
 
         # Compute font scale based on window width (reference = 1280px)
-        # Uses actual tkinter pixel measurement — works correctly on Linux HiDPI too
         self._compute_fonts(w)
+
+        # Calculate padding ONCE at startup based on actual screen width — same formula for all platforms
+        # Screen width never changes (unlike window width which is unstable during animations)
+        self._init_pad = 450 if sw > 3000 else max(40, int(sw * 0.06))
         # State
         self.db_connector  = None
         self.sync_running  = False
@@ -384,10 +387,11 @@ class SyncApp(ctk.CTk):
         self._load_config()
         self._build_ui()
         self._poll_log()
-        # Print detected scale so user can verify
         self.after(500, self._debug_scale)
-        # Bind resize to update padding AND fonts
-        self.bind("<Configure>", self._on_resize)
+        # Configure binding: Linux only — on Windows it causes hang + wrong padding on maximize/minimize
+        import platform
+        if platform.system() != "Windows":
+            self.bind("<Configure>", self._on_resize)
 
         # Connect ocr_pipeline logs to our UI activity log
         try:
@@ -481,72 +485,67 @@ class SyncApp(ctk.CTk):
         self.SB = max(180, int(200 * s))
 
     def _on_resize(self, event=None):
-        """Update padding AND font sizes whenever window is resized (debounced)."""
+        """Update padding on resize (debounced). Font refresh skipped on Windows to prevent hang."""
         if getattr(self, "_resize_lock", False):
             return
         if event and event.widget is not self:
             return
-            
+
         new_w = self.winfo_width()
-        if new_w < 100: # Ignore tiny/invalid widths during init/iconify
+        if new_w < 100:
             return
-            
-        # Skip if width change is tiny to prevent jitter/loops
+
         old_w = getattr(self, "_last_resize_w", 0)
         if abs(new_w - old_w) < 15:
             return
-            
-        # Windows Maximize Handling: Increase debounce to 500ms to let window settle
+
         import platform
-        debounce = 500 if platform.system() == "Windows" else 300
-        
+        debounce = 600 if platform.system() == "Windows" else 300
+
         if hasattr(self, "_resize_job") and self._resize_job:
-            try:
-                self.after_cancel(self._resize_job)
+            try: self.after_cancel(self._resize_job)
             except: pass
-            
+
         self._resize_job = self.after(debounce, lambda: self._do_resize(new_w))
 
     def _do_resize(self, new_w):
         """Actual resize logic — runs once after debounce settles."""
         if getattr(self, "_resize_lock", False):
             return
-            
-        # Double-check width is still valid
+
         actual_w = self.winfo_width()
         if abs(actual_w - new_w) > 50:
             new_w = actual_w
-            
+
         self._last_resize_w = new_w
         self._resize_job = None
-        
-        old_scale = getattr(self, "_scale", 0)
-        # Recompute fonts
-        self._compute_fonts(new_w)
-        
-        if abs(self._scale - old_scale) < 0.01:
-            return
-            
-        # Start Lock
         self._resize_lock = True
+
+        import platform
+        is_windows = platform.system() == "Windows"
+
         try:
+            self._compute_fonts(new_w)
             self._win_w = new_w
-            # Update padding on main sections
-            import platform
-            pad_mult = 0.10 if platform.system() == "Windows" else 0.06
-            pad = 450 if new_w > 3000 else max(24, int(new_w * pad_mult))
-            
+
+            # Padding: use the fixed startup value — never recalculate during resize
+            # This prevents margin collapse on maximize/minimize
+            pad = self._init_pad
             for widget_name in ("_dashboard_label", "_cards_frame", "_act_frame_outer"):
                 widget = getattr(self, widget_name, None)
                 if widget:
                     try: widget.grid_configure(padx=pad)
                     except: pass
-            
-            # Refresh all registered widget fonts
-            self._refresh_fonts()
-            
+
+            # Font refresh: SKIP on Windows (causes hang by updating 100s of widgets at once)
+            # On Linux it's fine because the OS handles redraws differently
+            if not is_windows:
+                old_scale = getattr(self, "_prev_scale", 0)
+                if abs(self._scale - old_scale) >= 0.01:
+                    self._prev_scale = self._scale
+                    self._refresh_fonts()
+
         finally:
-            # Release Lock
             self._resize_lock = False
 
     def _refresh_fonts(self):
@@ -937,8 +936,8 @@ class SyncApp(ctk.CTk):
         self.scroll.grid(row=1, column=0, sticky="nsew")
         self.scroll.grid_columnconfigure(0, weight=1)
 
-        # Responsive side padding
-        init_pad = 450 if self._win_w > 3000 else max(24, int(self._win_w * 0.06))
+        # Use the startup padding value (calculated once from screen width)
+        init_pad = self._init_pad
 
         # Dashboard title
         lbl = ctk.CTkLabel(self.scroll, text="Dashboard",
