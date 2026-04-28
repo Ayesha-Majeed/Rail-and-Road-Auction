@@ -267,14 +267,15 @@ class DBConnector:
         self.connected = False
 
     def connect(self):
-        max_retries = 3
+        # Reduced retries and timeout for faster feedback when offline
+        max_retries = 2
         last_error = ""
         
         for attempt in range(1, max_retries + 1):
             try:
                 from pymongo import MongoClient
-                # Increase timeout slightly and try connecting
-                self.client = MongoClient(self.uri, serverSelectionTimeoutMS=15000)
+                # Fast timeout: 3 seconds is enough for a healthy connection
+                self.client = MongoClient(self.uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
                 self.client.admin.command("ping")
                 self.db = self.client[self.db_name]
                 self.connected = True
@@ -288,7 +289,7 @@ class DBConnector:
                     last_error = detailed_err
                 
                 if attempt < max_retries:
-                    time.sleep(1.5) # Wait before retry
+                    time.sleep(1.0) # Faster retry interval
                 continue
         
         self.connected = False
@@ -673,8 +674,11 @@ class SyncApp(ctk.CTk):
         def _mk_icon(p):
             if os.path.exists(p):
                 try:
+                    import platform
                     from PIL import Image
-                    return ctk.CTkImage(light_image=Image.open(p), size=(20, 20))
+                    # Windows: CTkImage multiplies by DPI scale, so use smaller base size
+                    icon_size = (16, 16) if platform.system() == "Windows" else (20, 20)
+                    return ctk.CTkImage(light_image=Image.open(p), size=icon_size)
                 except Exception:
                     try:
                         return PhotoImage(file=p)
@@ -834,35 +838,29 @@ class SyncApp(ctk.CTk):
         self._set_conn_visual("connecting")
         def _task():
             ok, msg, missing = model_manager.health_check()
-            # 2. Proactive Reconnection: If we have a verified token in this session, ensure we are connected
-            token = self._session_token
-            if ok and token:
-                if not self.db_connector:
-                    uri = (os.environ.get("MONGO_URI") or 
-                           self.config.get("mongo_uri") or 
-                           "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test").strip()
-                    self.db_connector = DBConnector(uri, self.config.get("db_name", "Test"))
-                
-                # Force a ping to get the true connection state
-                self.db_connector.ping()
-                
-                if ok and not self.db_connector.connected:
-                    # Try a fresh connect if ping failed
-                    try:
-                        cok, _ = self.db_connector.connect()
-                        if cok:
-                            u = self.db_connector.find_user_by_token(token)
-                            if u and self.winfo_exists():
-                                self.current_user = {"id": str(u.get("_id")), "username": u.get("username", "")}
-                    except:
-                        pass
+            
+            # 3. Connection Health: Check if internet/DB is reachable
+            conn_ok = True
+            if self.db_connector:
+                # Fast ping
+                conn_ok = self.db_connector.ping()
+            else:
+                conn_ok = False
 
             if self.winfo_exists():
-                self.after(0, lambda: self._on_health_check_manual_done(ok, msg, missing))
+                self.after(0, lambda: self._on_health_check_manual_done(ok, msg, missing, conn_ok))
         threading.Thread(target=_task, daemon=True).start()
 
-    def _on_health_check_manual_done(self, ok, msg, missing):
+    def _on_health_check_manual_done(self, ok, msg, missing, conn_ok=True):
         if not self.winfo_exists(): return
+        
+        # Show specific internet error if DB connection failed but models are OK
+        if not conn_ok:
+            messagebox.showwarning("Connection Error", 
+                "Could not reach the database.\n\nPlease check your internet connection and try again.")
+            self._set_conn_visual("offline")
+            return
+
         if ok:
             messagebox.showinfo("Health Check", "All systems active!")
             # If we have a session token, we should be active. 
@@ -1237,53 +1235,13 @@ class SyncApp(ctk.CTk):
 
         # Demo rows removed; rows will appear during sync
         
-        # ── Live Pipeline Log (Toggleable) ──────────
-        ctk.CTkFrame(self.act_frame, height=1, fg_color=C["border"]).pack(fill="x", padx=20, pady=(12, 0))
-        
-        log_header = ctk.CTkFrame(self.act_frame, fg_color=C["white"])
-        log_header.pack(fill="x", padx=20, pady=8)
-        
-        self._reg(ctk.CTkLabel(log_header, text="Live Pipeline Logs",
-                     font=ctk.CTkFont(family="Outfit", size=self.F["table_h"], weight="bold"),
-                     text_color=C["muted"]), 13, "Outfit", "bold").pack(side="left")
-        
-        self.log_toggle_btn = ctk.CTkButton(log_header, text="Show Logs", width=80, height=24,
-                                            corner_radius=6, border_width=1, border_color=C["border"],
-                                            fg_color=C["white"], text_color=C["muted"],
-                                            font=ctk.CTkFont(size=self.F["muted"]),
-                                            hover_color="#F5F5F5",
-                                            command=self._toggle_log_box)
-        self.log_toggle_btn.pack(side="right")
-
-        self.log_box_container = ctk.CTkFrame(self.act_frame, fg_color="#F9FAFB", height=0)
-        self.log_box_container.pack(fill="x", padx=20, pady=(0, 16))
-        self.log_box_container.pack_propagate(False)
-
-        # Standard Text widget for absolute reliability across platforms
-        from tkinter import Text, Scrollbar
-        self.log_scroll = Scrollbar(self.log_box_container)
-        self.log_scroll.pack(side="right", fill="y")
-        
-        self.log_box = Text(self.log_box_container, 
-                            bg="#FFFBEB", fg="#000000", # High visibility yellow
-                            font=("Monospace", 10),
-                            borderwidth=0, highlightthickness=0,
-                            yscrollcommand=self.log_scroll.set)
-        self.log_box.pack(fill="both", expand=True, padx=8, pady=8)
-        self.log_scroll.config(command=self.log_box.yview)
-        
+        # Logs moved to Settings window — not shown on main page for clean client UI
+        # Create a hidden log_box for background logging (not visible on main page)
+        from tkinter import Text
+        self.log_box = Text(self.act_frame)
+        self.log_box.pack_forget()  # completely hidden
         self.log_box.configure(state="disabled")
         self.log_visible = False
-
-    def _toggle_log_box(self):
-        if self.log_visible:
-            self.log_box_container.configure(height=0)
-            self.log_toggle_btn.configure(text="Show Logs")
-            self.log_visible = False
-        else:
-            self.log_box_container.configure(height=250)
-            self.log_toggle_btn.configure(text="Hide Logs")
-            self.log_visible = True
 
     def _add_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
         """Add a new row to the activity table — optimized for performance."""
@@ -2233,21 +2191,22 @@ class SyncApp(ctk.CTk):
                     _ai_last_w = [0]
                     def _refresh_ai_wrap(_e=None):
                         import platform
-                        w = max(220, info.winfo_width() - 72)
+                        # Ensure we have enough margin to prevent horizontal overflow on Windows
+                        w = max(220, info.winfo_width() - 85)
                         if w == _ai_last_w[0]: return
                         _ai_last_w[0] = w
                         
-                        # Use width-based scaling just like the main page
-                        s = (info.winfo_width() / 1280.0)
+                        # Use width-based scaling but be more conservative on Windows
+                        s = (info.winfo_width() / 1440.0) # Using 1440 as base for tighter scaling
                         if platform.system() == "Windows":
-                            s *= 1.05 # Match the main page fudge factor
+                            s *= 0.95 # Reduced factor for Windows to compensate for OS scaling
                         else:
                             s *= self._get_os_scale()
-                        s = max(0.85, min(s, 1.8)) # Cap slightly lower for detail view
+                        s = max(0.75, min(s, 1.4)) # Lower cap for detail view stability
                         
-                        t_size = max(18, int(32 * s)) 
-                        s_size = max(16, int(24 * s))
-                        d_size = max(14, int(20 * s))
+                        t_size = max(16, int(28 * s)) 
+                        s_size = max(14, int(20 * s))
+                        d_size = max(12, int(18 * s))
                         
                         title_lbl.configure(wraplength=w, font=ctk.CTkFont(family="Outfit", size=t_size, weight="bold"))
                         if subtitle_lbl:
@@ -2320,23 +2279,24 @@ class SyncApp(ctk.CTk):
                     _trait_last_w = [0]
                     def _update_trait_wrap(e=None):
                         import platform
-                        wv = max(160, traits_card.winfo_width() - 100)
+                        wv = max(160, traits_card.winfo_width() - 110)
                         if wv == _trait_last_w[0]: return
                         _trait_last_w[0] = wv
                         try:
                             # Scale font size same way as title/description
-                            s = (info.winfo_width() / 1280.0)
+                            s = (info.winfo_width() / 1440.0)
                             if platform.system() == "Windows":
-                                s *= 1.05
+                                s *= 0.95
                             else:
                                 s *= self._get_os_scale()
-                            s = max(0.85, min(s, 1.8))
+                            s = max(0.75, min(s, 1.4))
                             
-                            val_size  = max(14, int(20 * s))  # only for author
+                            val_size  = max(13, int(18 * s))  # only for author
+                            lbl_size  = max(11, int(14 * s))
                             
                             author_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=val_size, weight="bold"))
-                            edition_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=16, weight="bold"))
-                            isbn_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=16, weight="bold"))
+                            edition_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=lbl_size, weight="bold"))
+                            isbn_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=lbl_size, weight="bold"))
                         except Exception:
                             pass
 
@@ -2750,10 +2710,21 @@ class SyncApp(ctk.CTk):
         scroll.grid_columnconfigure(0, weight=1)
 
         # Section: Automation
-        ctk.CTkLabel(scroll, text="⚙️  Automation Settings",
+        self._dev_clicks = 0
+        def _on_dev_click(e):
+            self._dev_clicks += 1
+            if self._dev_clicks >= 3:
+                try:
+                    log_label.grid()
+                    log_card.grid()
+                    win.geometry(f"{sw}x{sh}") # Expand to fit logs
+                except: pass
+
+        log_header_lbl = ctk.CTkLabel(scroll, text="⚙️  Automation Settings",
                      font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
-                     text_color=C["text"]).grid(
-            row=0, column=0, sticky="w", padx=24, pady=(24, 12))
+                     text_color=C["text"])
+        log_header_lbl.grid(row=0, column=0, sticky="w", padx=24, pady=(24, 12))
+        log_header_lbl.bind("<Button-1>", _on_dev_click)
 
         auto_card = self._settings_card(scroll, 1)
 
@@ -2789,49 +2760,80 @@ class SyncApp(ctk.CTk):
                       command=self._save_settings).grid(
             row=4, column=0, sticky="w", padx=20, pady=(0, 20))
 
-        # Section: Database
-        ctk.CTkLabel(scroll, text="🗄️  Database Connection",
+        # DB section intentionally hidden — config is locked and not relevant for end-user
+
+        # ── Section: Pipeline Logs (Hidden Developer Section) ──
+        log_label = ctk.CTkLabel(scroll, text="📋  Pipeline Logs",
                      font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
-                     text_color=C["text"]).grid(
-            row=2, column=0, sticky="w", padx=24, pady=(20, 12))
+                     text_color=C["text"])
+        log_label.grid(row=2, column=0, sticky="w", padx=24, pady=(20, 12))
+        log_label.grid_remove() # Hidden by default
 
-        db_card = self._settings_card(scroll, 3)
-        db_card.grid_columnconfigure(1, weight=1)
+        log_card = self._settings_card(scroll, 3)
+        log_card.grid_columnconfigure(0, weight=1)
+        log_card.grid_remove() # Hidden by default
 
-        fields = [
-            ("MongoDB URI",       "mongo_uri",  "mongodb+srv://user:pass@cluster..."),
-            ("Database Name",     "db_name",    "e.g. Test"),
-            ("Collection Name",   "collection", "e.g. Book Data"),
-        ]
-        self._db_vars = {}
-        for row_i, (lbl, key, ph) in enumerate(fields):
-            ctk.CTkLabel(db_card, text=lbl,
-                         font=ctk.CTkFont(family="Inter", size=self.F["label"], weight="bold"),
-                         text_color=C["hdr"]).grid(
-                row=row_i, column=0, padx=(20, 12), pady=10, sticky="w")
-            var = ctk.StringVar(value=self.config.get(key, ""))
-            self._db_vars[key] = var
-            e = ctk.CTkEntry(db_card, textvariable=var,
-                             placeholder_text=ph, height=self._px(44),
-                             border_width=1, border_color=C["border"],
-                             fg_color=C["card"], text_color=C["text"],
-                             font=ctk.CTkFont(family="Inter", size=self.F["input"]),
-                             state="disabled")
-            e.grid(row=row_i, column=1, padx=(0, 20), pady=10, sticky="ew")
+        # Copy log content from main log_box into this settings log viewer
+        from tkinter import Text, Scrollbar
+        log_frame = ctk.CTkFrame(log_card, fg_color="#FFFBEB", corner_radius=8)
+        log_frame.grid(row=0, column=0, sticky="nsew", padx=16, pady=(12, 4))
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkButton(db_card, text="🔒  DB Config (Locked)",
-                      height=self._px(44), corner_radius=self._px(10),
+        settings_log_scroll = Scrollbar(log_frame)
+        settings_log_scroll.pack(side="right", fill="y")
+
+        settings_log_box = Text(log_frame,
+                                bg="#FFFBEB", fg="#1a1a1a",
+                                font=("Monospace", 10),
+                                borderwidth=0, highlightthickness=0,
+                                height=18,
+                                yscrollcommand=settings_log_scroll.set)
+        settings_log_box.pack(fill="both", expand=True, padx=6, pady=6)
+        settings_log_scroll.config(command=settings_log_box.yview)
+
+        # Copy existing log content from the hidden main log_box
+        try:
+            self._settings_log_box = settings_log_box # Store reference for live updates
+            existing_logs = self.log_box.get("1.0", "end-1c")
+            if existing_logs.strip():
+                settings_log_box.configure(state="normal")
+                settings_log_box.insert("end", existing_logs)
+                settings_log_box.configure(state="disabled")
+                settings_log_box.see("end")
+            else:
+                settings_log_box.configure(state="normal")
+                settings_log_box.insert("end", "No logs yet. Run a sync to see activity here.")
+                settings_log_box.configure(state="disabled")
+        except Exception:
+            pass
+
+        def _on_settings_close():
+            self._settings_log_box = None # Clear reference
+            win.destroy()
+        
+        win.protocol("WM_DELETE_WINDOW", _on_settings_close)
+
+        ctk.CTkButton(log_card, text="🗑  Clear Logs",
+                      height=self._px(36), corner_radius=self._px(8),
                       font=ctk.CTkFont(family="Inter", size=self.F["btn"], weight="bold"),
-                      fg_color=C["olive"], hover_color=C["olive_dk"],
+                      fg_color="#EF4444", hover_color="#DC2626",
                       text_color=C["white"],
-                      state="disabled").grid(
-            row=len(fields), column=0, columnspan=2,
-            sticky="ew", padx=20, pady=(8, 20))
+                      command=lambda: [
+                          self.log_box.configure(state="normal"),
+                          self.log_box.delete("1.0", "end"),
+                          self.log_box.configure(state="disabled"),
+                          settings_log_box.configure(state="normal"),
+                          settings_log_box.delete("1.0", "end"),
+                          settings_log_box.configure(state="disabled")
+                      ]).grid(row=1, column=0, sticky="w", padx=16, pady=(4, 16))
 
-        # Responsive size
-        sw = max(520, int(self.winfo_width() * 0.40))
-        sh = max(560, int(self.winfo_height() * 0.70))
-        win.geometry(f"{sw}x{sh}")
+        # Responsive sizes
+        sw = max(560, int(self.winfo_width() * 0.45))
+        sh = max(750, int(self.winfo_height() * 0.85))
+        
+        # Initial small size for client view
+        win.geometry(f"{sw}x{self._px(400)}")
 
         # Center and show after all content is built
         win.update_idletasks()
@@ -3493,15 +3495,27 @@ class SyncApp(ctk.CTk):
             count += 1
         
         if batch:
+            # 1. Update the hidden master log box
             if self.log_box and hasattr(self.log_box, "winfo_exists") and self.log_box.winfo_exists():
                 try:
                     self.log_box.configure(state="normal")
                     self.log_box.insert("end", batch)
-                    self.log_box.see("end") # Force scroll to bottom for real-time tracking
+                    self.log_box.see("end")
                     self.log_box.configure(state="disabled")
-                    # DEPRECATED: Removed update_idletasks() as it causes lag/ghosting on Windows 
-                except Exception as e:
-                    print(f"DEBUG: Log box insert failed: {e}")
+                except Exception: pass
+            
+            # 2. Update the Settings log box IF open (LIVE MIRRORING)
+            s_log = getattr(self, "_settings_log_box", None)
+            if s_log and hasattr(s_log, "winfo_exists") and s_log.winfo_exists():
+                try:
+                    s_log.configure(state="normal")
+                    # If this was the first log after "No logs yet", clear that placeholder
+                    if s_log.get("1.0", "end-1c").startswith("No logs yet"):
+                        s_log.delete("1.0", "end")
+                    s_log.insert("end", batch)
+                    s_log.see("end")
+                    s_log.configure(state="disabled")
+                except Exception: pass
         
         self.after(150, self._poll_log) # Faster polling
 

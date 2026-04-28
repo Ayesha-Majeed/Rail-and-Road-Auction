@@ -23,6 +23,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+from tkinter import messagebox
 
 import ollama
 import requests
@@ -377,7 +378,19 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
             
             # Handle other errors
             if "error" in data:
-                log_fn(f"  ❌ API Error ({resp.status_code}): {data['error'].get('message')}")
+                err_msg = data['error'].get('message', 'Unknown Error')
+                log_fn(f"  ❌ API Error ({resp.status_code}): {err_msg}")
+                
+                # POPUP for Daily Limit or Rate Limit
+                if resp.status_code in [403, 429] and ("limit" in err_msg.lower() or "quota" in err_msg.lower()):
+                    try:
+                        # Use a thread-safe way to show message if possible, 
+                        # but usually tkinter calls from threads work if it's just a messagebox.
+                        messagebox.showwarning("API Limit Hit", 
+                            f"Google Books API Daily Limit Exceeded!\n\n"
+                            f"Error: {err_msg}\n\n"
+                            "Metadata will be 'N/A' for remaining books today unless you use a different API key.")
+                    except: pass
             else:
                 log_fn(f"  📡 API Status: {resp.status_code}")
             return None
