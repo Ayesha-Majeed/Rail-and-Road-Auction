@@ -743,17 +743,27 @@ def run_yolo(image_path: str) -> list:
         print("❌ doclayout-yolo not found.")
         sys.exit(1)
 
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
     model = YOLOv10(YOLO_WEIGHTS)
-    model.to("cpu")
+    model.to(device)
     results = model.predict(
         source=image_path, imgsz=1024,
-        conf=0.25, iou=0.45, verbose=False, device="cpu"
+        conf=0.25, iou=0.45, verbose=False, device=device,
+        workers=0
     )
     boxes = []
     for result in results:
         for box in result.boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             boxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+    
+    # Cleanup VRAM immediately to prevent bottleneck for EasyOCR/Ollama
+    del model
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        
     return boxes
 
 

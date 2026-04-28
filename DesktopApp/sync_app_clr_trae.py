@@ -2,6 +2,11 @@ import customtkinter as ctk
 import os
 import sys
 import io
+import multiprocessing
+
+# ─── PyInstaller Multiprocessing Fix ───
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 # ─── Stream Redirection for Windows --windowed mode ───
 class SafeStream:
@@ -366,9 +371,9 @@ class SyncApp(ctk.CTk):
         # Compute font scale based on window width (reference = 1280px)
         self._compute_fonts(w)
 
-        # Calculate padding ONCE at startup based on actual screen width — same formula for all platforms
-        # Screen width never changes (unlike window width which is unstable during animations)
-        self._init_pad = 450 if sw > 3000 else max(40, int(sw * 0.06))
+        # Unified Adaptive Padding: Balanced for both small and large screens
+        # 450px for ultra-wide, otherwise scales (12%), with a safe minimum of 80px
+        self._init_pad = 450 if w > 3000 else max(80, int(w * 0.12))
         # State
         self.db_connector  = None
         self.sync_running  = False
@@ -1186,7 +1191,8 @@ class SyncApp(ctk.CTk):
 
     # ── Recent Activity ────────────────────────────────────────────────────────
     def _build_activity_section(self):
-        init_pad = 450 if self._win_w > 3000 else max(176, int(self._win_w * 0.13))
+        # Use the same unified startup padding
+        init_pad = self._init_pad
         self.act_frame = ctk.CTkFrame(self.scroll,
                                       fg_color=C["white"],
                                       border_width=1, border_color=C["border"],
@@ -1441,6 +1447,7 @@ class SyncApp(ctk.CTk):
             # Larger controls for better accessibility
             # "Fit Image" button removed as requested
             ctk.CTkCheckBox(topbar, text="Show Thumbnails", variable=thumbs_var,
+                            fg_color=C["olive"], hover_color=C["olive_h"],
                             font=ctk.CTkFont(family="Inter", size=self.F["heading"])).pack(side="left", padx=16, pady=12)
             # Pack controls
             # for wdg in topbar.winfo_children(): # This loop is now redundant as the checkbox is packed directly
@@ -1499,10 +1506,11 @@ class SyncApp(ctk.CTk):
             win.bind("<Button-4>", _on_mouse_wheel, add="+")
             win.bind("<Button-5>", _on_mouse_wheel, add="+")
 
-            ctk.CTkButton(topbar, text="Close", height=42, corner_radius=12,
-                          font=ctk.CTkFont(family="Inter", size=self.F["btn"], weight="bold"),
+            self._reg(ctk.CTkButton(topbar, text="Close", height=self._px(32), width=self._px(80), 
+                          corner_radius=self._px(8),
+                          font=ctk.CTkFont(family="Inter", size=self._fs(13), weight="bold"),
                           fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
-                          command=lambda: _close_win()).pack(side="right", padx=20)
+                          command=lambda: _close_win()), 13, "Inter", "bold").pack(side="right", padx=24, pady=12)
 
             body = ctk.CTkFrame(win, fg_color=C["white"], corner_radius=0)
             body.grid(row=1, column=0, sticky="nsew")
@@ -1711,9 +1719,8 @@ class SyncApp(ctk.CTk):
                 # Force a full layout pass AFTER deiconify to fix "jumping" glitch
                 win.update()
                 
-                # Critical: Grab set can cause hangs on some Linux WMs if called too early
-                try: win.grab_set()
-                except: pass
+                # Removed grab_set() as it causes minimization issues on Windows and blocks the main app.
+                # Detail view is now non-modal, which is better for multi-tasking.
 
                 def _wait_layout_ready(attempt=0):
                     if not win.winfo_exists():
@@ -2148,7 +2155,7 @@ class SyncApp(ctk.CTk):
 
                     # Edit Button (Title)
                     title_edit = ctk.CTkLabel(title_hdr, text="✎ Edit",
-                                           font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
+                                           font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
                                            text_color="#2563EB", cursor="hand2")
                     title_edit.pack(side="right", padx=24)
                     title_edit.bind("<Button-1>", _on_edit_title)
