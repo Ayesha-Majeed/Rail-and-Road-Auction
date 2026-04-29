@@ -52,7 +52,7 @@ load_dotenv(env_path)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 VISION_MODEL   = os.getenv("VISION_MODEL", "minicpm-v:latest")
-GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY", "AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0")
+GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY", "AIzaSyDLMtstRTU1VxKTlnBp0WAkvJLxI9qdrC8")
 
 def check_env_loaded(log_fn=print):
     """Log the environment status for debugging."""

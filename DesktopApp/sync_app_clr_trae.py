@@ -1,6 +1,18 @@
 import customtkinter as ctk
 import os
 import sys
+import platform
+import ssl
+
+# ─── SSL Certificate Fix for Windows / PyInstaller (IMMEDIATE) ───
+try:
+    import certifi
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+    os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+    ssl._create_default_https_context = ssl._create_unverified_context
+except Exception:
+    pass
+
 import io
 import multiprocessing
 
@@ -24,8 +36,6 @@ if sys.stderr is None: sys.stderr = SafeStream(None)
 from tkinter import filedialog, messagebox, PhotoImage, Canvas
 import threading
 import json
-import os
-import sys
 import re
 import time
 import queue
@@ -389,6 +399,7 @@ class SyncApp(ctk.CTk):
         self._folder_selected_session = False
         self.current_user = None
         self._session_token = None # Persistent ONLY within this session (Memory-only)
+        self.last_sync_results = {} # book_id -> pages list
 
         self._load_config()
         self._build_ui()
@@ -712,23 +723,27 @@ class SyncApp(ctk.CTk):
         self.conn_text.pack(side="left", padx=(0, 10))
         self._set_conn_visual("neutral")
 
-        self._reg(ctk.CTkButton(right, text="⚙", width=self._px(36), height=self._px(36),
+        self.btn_settings = ctk.CTkButton(right, text="⚙", width=self._px(36), height=self._px(36),
                       corner_radius=self._px(18),
                       fg_color="transparent",
                       border_width=1, border_color=C["border"],
                       text_color=C["muted"],
                       hover_color="#F5F5F5",
                       font=ctk.CTkFont(size=self.F["heading"]),
-                      command=self._open_settings), 16, "Inter", "normal").pack(side="left", padx=(0, 8))
+                      state="disabled", # Initially disabled
+                      command=self._open_settings)
+        self._reg(self.btn_settings, 16, "Inter", "normal").pack(side="left", padx=(0, 8))
 
-        self._reg(ctk.CTkButton(right, text="↻", width=self._px(36), height=self._px(36),
+        self.btn_refresh = ctk.CTkButton(right, text="↻", width=self._px(36), height=self._px(36),
                       corner_radius=self._px(18),
                       fg_color="transparent",
                       border_width=1, border_color=C["border"],
                       text_color=C["muted"],
                       hover_color="#F5F5F5",
                       font=ctk.CTkFont(size=self.F["heading"]),
-                      command=self._check_models_manual), 16, "Inter", "normal").pack(side="left", padx=(0, 8))
+                      state="disabled", # Initially disabled
+                      command=self._check_models_manual)
+        self._reg(self.btn_refresh, 16, "Inter", "normal").pack(side="left", padx=(0, 8))
 
         self.btn_stop = ctk.CTkButton(right, text="⏹", width=self._px(36), height=self._px(36),
                                       corner_radius=self._px(18),
@@ -987,11 +1002,30 @@ class SyncApp(ctk.CTk):
                                 bg="#F5F2EC", title_color="#090909", desc_color="#808080",
                                 icon_bg="#AA9874",
                                 cmd=lambda: self._browse_folder("books"),
+                                show_manual=True,
                                 width=None, height=None, border_color="#E4E7EC",
                                 title_size=17, desc_size=14, wrap=218, icon_pady=(0, self._px(48)),
                                 icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "upload_icon.png"))
 
-        # ── Recent Activity ───────────────────────────────────────────────────
+        # Row 1: Manual Selection Buttons (Maintaining Transparent Style with More Height)
+        m_slides_btn = ctk.CTkButton(upload_pair, text="Process Single Lot of Slides",
+                              height=55, corner_radius=12,
+                              font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
+                              fg_color="transparent", border_width=2, border_color="#D1D5DB",
+                              text_color="#6B7280", hover_color="#F3F4F6",
+                              state="disabled", # Disabled for now
+                              command=lambda: self._browse_manual("slides"))
+        m_slides_btn.grid(row=1, column=0, sticky="ew", padx=8, pady=(12, 0))
+
+        m_books_btn = ctk.CTkButton(upload_pair, text="Process Single Book Files",
+                              height=55, corner_radius=12,
+                              font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
+                              fg_color="transparent", border_width=2, border_color="#8C7B5D",
+                              text_color="#8C7B5D", hover_color="#F5F2EC",
+                              command=lambda: self._browse_manual("books"))
+        m_books_btn.grid(row=1, column=1, sticky="ew", padx=8, pady=(12, 0))
+        
+        # Recent Activity on Row 2 of self.scroll
         self._build_activity_section()
 
     # ── Token Card ─────────────────────────────────────────────────────────────
@@ -1155,14 +1189,7 @@ class SyncApp(ctk.CTk):
                      anchor="w"), _desc_base, "Outfit", "normal")
         _desc_lbl.grid(row=2, column=0, sticky="ew")
 
-        if show_manual:
-            m_btn = ctk.CTkButton(cf, text="Manual Image Selection",
-                                  height=self._px(32), corner_radius=self._px(8),
-                                  font=ctk.CTkFont(family="Inter", size=self._fs(12), weight="bold"),
-                                  fg_color="transparent", border_width=1, border_color=C["border"],
-                                  text_color=C["muted"], hover_color="#F0F0F0",
-                                  command=self._browse_manual)
-            m_btn.grid(row=3, column=0, sticky="w", pady=(12, 0))
+        # Manual button removed from inside card for cleaner UI
 
         _wrap_last_w = [0]
         def _update_wrap(e=None):
@@ -1196,7 +1223,7 @@ class SyncApp(ctk.CTk):
                                       fg_color=C["white"],
                                       border_width=1, border_color=C["border"],
                                       corner_radius=self._px(12))
-        self.act_frame.grid(row=2, column=0, sticky="ew", padx=init_pad, pady=(0, 32))
+        self.act_frame.grid(row=3, column=0, sticky="ew", padx=init_pad, pady=(0, 32))
         self._act_frame_outer = self.act_frame
         self.act_frame.grid_columnconfigure(0, weight=1)
 
@@ -1483,6 +1510,7 @@ class SyncApp(ctk.CTk):
             preview.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
             preview.grid_propagate(False)
 
+            # --- LOGGING SETUP ---
             # --- Layout Stabilization Loader ---
             loader_container = ctk.CTkFrame(preview, fg_color=C["white"])
             loader_container.place(relx=0.5, rely=0.5, anchor="center")
@@ -2238,43 +2266,43 @@ class SyncApp(ctk.CTk):
 
                     # 2. Author Subsection
                     ctk.CTkLabel(traits_body, text="Author",
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(0, 10))
+                                 font=ctk.CTkFont(family="Inter", size=15 if platform.system() == "Windows" else 20, weight="normal"),
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(0, 6))
 
                     author_val = doc.get("author", "") or "(Not Found)"
-                    author_pill = ctk.CTkFrame(traits_body, fg_color="#EFF6FF", border_width=1, border_color="#BFDBFE", corner_radius=10)
+                    author_pill = ctk.CTkFrame(traits_body, fg_color="#EFF6FF", border_width=1, border_color="#BFDBFE", corner_radius=8)
                     author_pill.pack(anchor="w")
                     author_lbl = ctk.CTkLabel(author_pill, text=author_val,
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
-                                 text_color="#1D4ED8", padx=20, pady=12,
+                                 font=ctk.CTkFont(family="Outfit", size=16 if platform.system() == "Windows" else 20, weight="bold"),
+                                 text_color="#1D4ED8", padx=16, pady=8,
                                  justify="left", anchor="w", fg_color="#EFF6FF")
                     author_lbl.pack(fill="x")
 
                     # 3. Edition Subsection
                     ctk.CTkLabel(traits_body, text="Edition",
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(16, 10))
+                                 font=ctk.CTkFont(family="Inter", size=15 if platform.system() == "Windows" else 20, weight="normal"),
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(12, 6))
                     
                     edition_val = doc.get("edition", "") or "(Not Found)"
-                    edition_pill = ctk.CTkFrame(traits_body, fg_color="#FFFBEB", border_width=1, border_color="#FEF3C7", corner_radius=10)
+                    edition_pill = ctk.CTkFrame(traits_body, fg_color="#FFFBEB", border_width=1, border_color="#FEF3C7", corner_radius=8)
                     edition_pill.pack(anchor="w")
                     edition_lbl = ctk.CTkLabel(edition_pill, text=edition_val,
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
-                                 text_color="#B45309", padx=20, pady=12,
+                                 font=ctk.CTkFont(family="Outfit", size=16 if platform.system() == "Windows" else 20, weight="bold"),
+                                 text_color="#B45309", padx=16, pady=8,
                                  justify="left", anchor="w", fg_color="#FFFBEB")
                     edition_lbl.pack(fill="x")
 
                     # 4. ISBN Subsection
                     ctk.CTkLabel(traits_body, text="ISBN",
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="normal"),
-                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(16, 10))
+                                 font=ctk.CTkFont(family="Inter", size=15 if platform.system() == "Windows" else 20, weight="normal"),
+                                 text_color="#6B7280", fg_color="#FFFFFF").pack(anchor="w", pady=(12, 6))
                     
                     isbn_val = doc.get("isbn", "") or "(Not Found)"
-                    isbn_pill = ctk.CTkFrame(traits_body, fg_color="#F3F4F6", border_width=1, border_color="#D1D5DB", corner_radius=10)
+                    isbn_pill = ctk.CTkFrame(traits_body, fg_color="#F3F4F6", border_width=1, border_color="#D1D5DB", corner_radius=8)
                     isbn_pill.pack(anchor="w")
                     isbn_lbl = ctk.CTkLabel(isbn_pill, text=isbn_val,
-                                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
-                                 text_color="#374151", padx=20, pady=12,
+                                 font=ctk.CTkFont(family="Outfit", size=16 if platform.system() == "Windows" else 20, weight="bold"),
+                                 text_color="#374151", padx=16, pady=8,
                                  justify="left", anchor="w")
                     isbn_lbl.pack(fill="x")
 
@@ -2293,12 +2321,16 @@ class SyncApp(ctk.CTk):
                                 s *= self._get_os_scale()
                             s = max(0.75, min(s, 1.4))
                             
-                            val_size  = max(13, int(18 * s))  # only for author
-                            lbl_size  = max(11, int(14 * s))
+                            # Much tighter font scaling for traits on Windows
+                            val_base = 16 if platform.system() == "Windows" else 18
+                            lbl_base = 13 if platform.system() == "Windows" else 14
                             
-                            author_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=val_size, weight="bold"))
-                            edition_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=lbl_size, weight="bold"))
-                            isbn_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Inter", size=lbl_size, weight="bold"))
+                            val_size  = max(13, int(val_base * s))
+                            lbl_size  = max(11, int(lbl_base * s))
+                            
+                            author_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Outfit", size=val_size, weight="bold"))
+                            edition_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Outfit", size=lbl_size, weight="bold"))
+                            isbn_lbl.configure(wraplength=wv, font=ctk.CTkFont(family="Outfit", size=lbl_size, weight="bold"))
                         except Exception:
                             pass
 
@@ -2854,6 +2886,155 @@ class SyncApp(ctk.CTk):
         return c
 
     # ── Actions ────────────────────────────────────────────────────────────────
+    def _browse_manual(self, mode="books"):
+        if not self.current_user:
+            messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before uploading.")
+            return
+        
+        title = "Select Book Images" if mode == "books" else "Select Slide Images"
+        files = filedialog.askopenfilenames(title=title, 
+                                            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp")])
+        if not files: return
+
+        selected_files = list(files)
+        # Smart Auto-Pickup: If user selects only one file, look for siblings with same prefix
+        if len(selected_files) == 1:
+            first_file = selected_files[0]
+            folder = os.path.dirname(first_file)
+            bn = os.path.basename(first_file)
+            prefix = bn.split('_')[0] if '_' in bn else (bn.split('-')[0] if '-' in bn else bn.split('.')[0])
+            
+            # Look for other files in same folder with same prefix
+            siblings = [os.path.join(folder, f) for f in os.listdir(folder) 
+                        if (f.startswith(prefix + "_") or f.startswith(prefix + "-")) 
+                        and f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+            
+            if len(siblings) > 1:
+                selected_files = list(set(selected_files + siblings)) # Add siblings
+                self._log(f"🔎 Auto-detected {len(siblings)} related images for ID: {prefix}")
+            elif mode == "books":
+                # Warning if still only 1 image for books
+                res = messagebox.askyesno("Limited Data Warning", 
+                    f"Only one image found for ID '{prefix}'.\n\n"
+                    "AI might not be able to extract full metadata (ISBN, Author, Edition) from a single page.\n\n"
+                    "Do you want to continue anyway?")
+                if not res: return
+
+        # Group files by prefix
+        groups = {}
+        for f in selected_files:
+            bn = os.path.basename(f)
+            prefix = bn.split('_')[0] if '_' in bn else (bn.split('-')[0] if '-' in bn else bn.split('.')[0])
+            if prefix not in groups: groups[prefix] = []
+            
+            import re
+            nums = re.findall(r'\d+', bn)
+            page_num = int(nums[-1]) if nums else 0
+            groups[prefix].append((page_num, f))
+        
+        if not groups:
+            messagebox.showerror("Selection Error", "No valid images could be grouped.")
+            return
+
+        self._clear_activity()
+        self._log(f"📄 Manual processing: {len(groups)} book(s) identified.")
+        
+        def _check_and_start_manual():
+            self.sync_running = True
+            self.after(0, lambda: self.btn_stop.configure(state="normal"))
+            self._log("🚀 Manual Sync started!")
+            threading.Thread(target=self._manual_worker, args=(groups,), daemon=True).start()
+
+        threading.Thread(target=_check_and_start_manual, daemon=True).start()
+
+    def _manual_worker(self, books):
+        """Processes only the specific books selected manually and then stops."""
+        try:
+            if OCR_AVAILABLE:
+                ocr_pipeline.cleanup_gpu()
+
+            sorted_ids = sorted(books.keys())
+            for book_id in sorted_ids:
+                if not self.sync_running: break
+                
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Reuse the core processing logic
+                self._process_single_book_flow(book_id, books[book_id], ts)
+            
+            self._log("✅ Manual sync complete.")
+        finally:
+            self.sync_running = False
+            self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+
+    def _process_single_book_flow(self, book_id, book_pages, ts):
+        """The core logic to process one book from start to finish."""
+        coll = self.config.get("collection", "Book Data")
+        
+        # UI Status: Queued
+        self.after(0, lambda: self.update_activity_row(book_id, "Queued", "Book", ts))
+        time.sleep(0.1)
+
+        # UI Status: Processing
+        self.after(0, lambda: self.update_activity_row(book_id, "Processing", "Book", ts))
+        time.sleep(0.2)
+
+        self._log(f"  📖 {book_id}…")
+
+        # 1. DB Check
+        try:
+            if self.db_connector.book_exists(coll, book_id):
+                self._log(f"  ⏭️  Already exists, skipping.")
+                self.after(0, lambda: self.update_activity_row(book_id, "Skipped", "Book", ts))
+                return
+        except Exception as e:
+            self._log(f"  ⚠️ DB check error: {e}")
+
+        # 2. Build Base Doc
+        grouper = BookGrouper()
+        doc = grouper.build_document(book_id, book_pages)
+        if self.current_user:
+            doc["user_id"] = self.current_user.get("id")
+
+        # 3. OCR Pipeline
+        ai_result = None
+        if OCR_AVAILABLE:
+            try:
+                ai_result = self._process_book_ocr(book_id, book_pages, ts)
+                if ai_result:
+                    doc.update({
+                        "title": ai_result.get("title", ""),
+                        "subtitle": ai_result.get("subtitle", ""),
+                        "author": ai_result.get("author", "Not Found"),
+                        "edition": ai_result.get("edition", "Not Specified"),
+                        "isbn": ai_result.get("isbn", "N/A"),
+                        "description": ai_result.get("description", ""),
+                        "ocr_completed": True
+                    })
+                    self._log(f"  🎉 AI done: {book_id}")
+                else:
+                    doc["ocr_completed"] = False
+                    self._log(f"  ⚠️ OCR returned no results for {book_id}")
+            except Exception as e:
+                doc["ocr_completed"] = False
+                self._log(f"  ⚠️ OCR pipeline error: {e}")
+        else:
+            self.after(0, lambda: self.update_activity_row(book_id, "Failed", "No Models", ts))
+            return
+
+        # 4. Insert to DB
+        if ai_result:
+            try:
+                self.db_connector.insert_book(coll, doc)
+                self._log(f"  ✅ Synced: {book_id}")
+                # Save to last_sync_results so it can be opened on click
+                self.last_sync_results[book_id] = book_pages
+                self.after(0, lambda: self.update_activity_row(book_id, "Complete", "Book", ts))
+            except Exception as e:
+                self._log(f"  ❌ DB Error: {e}")
+                self.after(0, lambda: self.update_activity_row(book_id, "Failed", "DB Error", ts))
+        else:
+            self.after(0, lambda: self.update_activity_row(book_id, "Partial", "OCR Fail", ts))
+
     def _browse_folder(self, mode="books"):
         if not self.current_user:
             messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before uploading.")
@@ -2960,6 +3141,10 @@ class SyncApp(ctk.CTk):
                 pass
             self._set_conn_visual("active")
             self._log(f"✅ Connected → {dbname} as {self.current_user.get('username','user')}")
+            
+            # Unlock header features on success
+            self.after(0, lambda: self.btn_settings.configure(state="normal"))
+            self.after(0, lambda: self.btn_refresh.configure(state="normal"))
             
             # --- Session-Only Persistence: Save only in memory, NOT to file for security ---
             self._session_token = token
