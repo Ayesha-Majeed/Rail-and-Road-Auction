@@ -2956,7 +2956,7 @@ class SyncApp(ctk.CTk):
         
         title = "Select Book Images" if mode == "books" else "Select Slide Images"
         files = filedialog.askopenfilenames(title=title, 
-                                            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp")])
+                                            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp *.JPG *.JPEG *.PNG *.WEBP")])
         if not files: return
 
         selected_files = list(files)
@@ -3066,7 +3066,7 @@ class SyncApp(ctk.CTk):
                 image_files = []
         else:
             files = filedialog.askopenfilenames(title="Select Train Slide Images", 
-                                                filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp *.bmp")])
+                                                filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp *.bmp *.JPG *.JPEG *.PNG *.WEBP *.BMP")])
             if not files:
                 return
             image_files = list(files)
@@ -3234,7 +3234,8 @@ class SyncApp(ctk.CTk):
                                     "1. Write a fluent, conversational sentence.\n"
                                     "2. DO NOT use any numbers or slide counts.\n"
                                     "3. DO NOT invent or add any locomotive builders (e.g. EMD, Alco), models, or locations.\n"
-                                    "4. Output ONLY the final sentence. No introductory filler, no quotes, no extra text.\n\n"
+                                    "4. DO NOT guess, assume, or classify any train/car as 'passenger' or 'freight' unless that word is explicitly present in the Extracted Data.\n"
+                                    "5. Output ONLY the final sentence. No introductory filler, no quotes, no extra text.\n\n"
                                     "Example: This lot features slides of BNSF and Santa Fe diesel locomotives, along with Union Pacific steam engines."
                                 )
 
