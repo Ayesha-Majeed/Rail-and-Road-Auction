@@ -26,21 +26,20 @@ class ZoomableCanvas(Canvas):
         self.spinner_job = None
         self.is_loading = False
         
-        # Professional Overlay: Zoom Percentage & Reset View Button
-        self.overlay_frame = ctk.CTkFrame(self, fg_color="transparent")
+        # Professional Overlay: Zoom Percentage & Reset View Button (Premium Card Style)
+        self.overlay_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", border_width=1, border_color="#CBD5E1", corner_radius=8)
         
         self.zoom_lbl = ctk.CTkLabel(self.overlay_frame, text="100%", 
-                                     font=ctk.CTkFont(family="Inter", size=10, weight="bold"),
-                                     text_color="#475569", fg_color="#F1F5F9", corner_radius=6,
-                                     width=40, height=22)
-        self.zoom_lbl.pack(side="left", padx=2)
+                                     font=ctk.CTkFont(family="Inter", size=13, weight="bold"),
+                                     text_color="#475569", fg_color="transparent")
+        self.zoom_lbl.pack(side="left", padx=(12, 6), pady=6)
         
         self.reset_btn = ctk.CTkButton(self.overlay_frame, text="Reset View",
-                                       font=ctk.CTkFont(family="Inter", size=10, weight="bold"),
+                                       font=ctk.CTkFont(family="Inter", size=13, weight="bold"),
                                        text_color="white", fg_color="#8C7B5D", hover_color="#6B5C41", # Primary branding olive
-                                       width=70, height=22, corner_radius=6,
+                                       width=95, height=28, corner_radius=6,
                                        command=self.reset_view)
-        self.reset_btn.pack(side="left", padx=2)
+        self.reset_btn.pack(side="left", padx=(6, 12), pady=6)
         
     def show_text(self, text):
         self.is_loading = False
@@ -90,9 +89,9 @@ class ZoomableCanvas(Canvas):
         self.original_image = pil_image
         self.update_idletasks()
         
-        # Display overlay on top-right
+        # Display overlay on bottom-right of the image panel
         if hasattr(self, "overlay_frame"):
-            self.overlay_frame.place(relx=0.98, rely=0.02, anchor="ne")
+            self.overlay_frame.place(relx=0.98, rely=0.98, anchor="se")
             
         cw, ch = self.winfo_width(), self.winfo_height()
         if cw <= 1 or ch <= 1:
@@ -285,12 +284,12 @@ def open_train_lot_detail(parent_app, lot_id):
                              text_color=C["text"])
     title_lbl.pack(side="left", padx=20, pady=15)
 
-    close_btn = ctk.CTkButton(topbar, text="Close", height=32, width=80,
+    close_btn = ctk.CTkButton(topbar, text="Close", height=38, width=120,
                               corner_radius=8,
-                              font=ctk.CTkFont(family="Inter", size=13, weight="bold"),
+                              font=ctk.CTkFont(family="Inter", size=15, weight="bold"),
                               fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
                               command=win.destroy)
-    close_btn.pack(side="right", padx=20, pady=15)
+    close_btn.pack(side="right", padx=20, pady=11)
 
     # Body
     body = ctk.CTkFrame(win, fg_color=C["bg"], corner_radius=0)
@@ -310,14 +309,13 @@ def open_train_lot_detail(parent_app, lot_id):
     preview_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
     preview_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
     
+    # Pack nav_frame FIRST at the bottom so it secures its height and doesn't get squished by the expanding canvas
+    nav_frame = ctk.CTkFrame(preview_frame, fg_color="transparent", height=48)
+    nav_frame.pack(side="bottom", fill="x", pady=(8, 0))
+
     main_lbl = ZoomableCanvas(preview_frame, bg=C["white"])
     main_lbl.pack(expand=True, fill="both")
     main_lbl.show_loading()
-
-    # Navigation overlay/buttons (Initially hidden to prevent raw clipped buttons while loading)
-    nav_frame = ctk.CTkFrame(preview_frame, fg_color="transparent", height=40)
-
-
 
     idx_var = tk.IntVar(value=0)
 
@@ -334,22 +332,31 @@ def open_train_lot_detail(parent_app, lot_id):
             _render_main()
             _render_thumbs()
 
-    prev_btn = ctk.CTkButton(nav_frame, text="◀ Previous", command=_prev, width=100,
-                             fg_color=C["olive"], hover_color=C["olive_h"], text_color="white")
-    prev_btn.pack(side="left", padx=10)
+    # Center container inside nav_frame to keep the navigation buttons grouped neatly under the image
+    nav_container = ctk.CTkFrame(nav_frame, fg_color="transparent")
+    nav_container.pack(anchor="center", pady=5)
 
-    counter_lbl = ctk.CTkLabel(nav_frame, text="0 / 0", font=ctk.CTkFont(family="Inter", size=13, weight="bold"),
+    prev_btn = ctk.CTkButton(nav_container, text="◀ Previous", command=_prev, width=130, height=38,
+                             font=ctk.CTkFont(family="Inter", size=15, weight="bold"),
+                             fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
+                             corner_radius=8)
+    prev_btn.pack(side="left", padx=15)
+
+    counter_lbl = ctk.CTkLabel(nav_container, text="0 / 0", font=ctk.CTkFont(family="Inter", size=16, weight="bold"),
                                text_color=C["text"])
-    counter_lbl.pack(side="left", expand=True)
+    counter_lbl.pack(side="left", padx=25)
 
-    next_btn = ctk.CTkButton(nav_frame, text="Next ▶", command=_next, width=100,
-                             fg_color=C["olive"], hover_color=C["olive_h"], text_color="white")
-    next_btn.pack(side="right", padx=10)
+    next_btn = ctk.CTkButton(nav_container, text="Next ▶", command=_next, width=130, height=38,
+                             font=ctk.CTkFont(family="Inter", size=15, weight="bold"),
+                             fg_color=C["olive"], hover_color=C["olive_h"], text_color="white",
+                             corner_radius=8)
+    next_btn.pack(side="left", padx=15)
 
     # Thumbnails Frame
     scale = getattr(parent_app, "_scale", 1.0)
     thumbs_scroll = ctk.CTkScrollableFrame(left_panel, orientation="horizontal", 
                                           fg_color=C["bg"], height=int(150 * scale))
+    thumbs_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
 
     # Hide horizontal scrollbar completely for a modern clean touch-dragging look
     try:
@@ -472,6 +479,7 @@ def open_train_lot_detail(parent_app, lot_id):
                                border_width=1, border_color=C["border"])
     right_panel.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
     right_panel.grid_rowconfigure(0, weight=1)
+    right_panel.grid_rowconfigure(1, weight=0)
     right_panel.grid_columnconfigure(0, weight=1)
     right_panel.grid_propagate(False)
 
@@ -479,82 +487,11 @@ def open_train_lot_detail(parent_app, lot_id):
                                         scrollbar_fg_color="#E5E7EB",
                                         scrollbar_button_color=C["olive_dk"],
                                         scrollbar_button_hover_color=C["olive"])
-    res_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+    res_scroll.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
-    # ── Section 1: Railroads Name Card (Blue Theme) ──
-    card1 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card1.pack(fill="x", padx=12, pady=(12, 6))
-
-    card1_hdr = ctk.CTkFrame(card1, fg_color="#EFF6FF", height=48, corner_radius=0)
-    card1_hdr.pack(fill="x")
-    card1_hdr.pack_propagate(False)
-
-    card1_badge_wrap = ctk.CTkFrame(card1_hdr, fg_color="transparent")
-    card1_badge_wrap.pack(side="left", padx=16)
-
-    ctk.CTkLabel(card1_badge_wrap, text="Ai", width=28, height=28,
-                 corner_radius=6, fg_color="#DBEAFE", text_color="#2563EB",
-                 font=ctk.CTkFont(family="Inter", size=11, weight="bold")
-                 ).pack(side="left")
-
-    ctk.CTkLabel(card1_badge_wrap, text="Railroads",
-                 font=ctk.CTkFont(family="Inter", size=int(15 * scale), weight="bold"),
-                 text_color="#1E3A8A").pack(side="left", padx=(10, 0))
-
-    railroads_val_lbl = ctk.CTkLabel(card1, text="",
-                                     font=ctk.CTkFont(family="Inter", size=int(14 * scale), weight="bold"),
-                                     text_color="#94A3B8", anchor="nw", justify="left", wraplength=350)
-    railroads_val_lbl.pack(anchor="nw", padx=24, pady=20, fill="both", expand=True)
-
-    # ── Section 2: Locomotive Engine Types Card (Purple Theme) ──
-    card2 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card2.pack(fill="x", padx=12, pady=6)
-
-    card2_hdr = ctk.CTkFrame(card2, fg_color="#FAF5FF", height=48, corner_radius=0)
-    card2_hdr.pack(fill="x")
-    card2_hdr.pack_propagate(False)
-
-    card2_badge_wrap = ctk.CTkFrame(card2_hdr, fg_color="transparent")
-    card2_badge_wrap.pack(side="left", padx=16)
-
-    ctk.CTkLabel(card2_badge_wrap, text="Ai", width=28, height=28,
-                 corner_radius=6, fg_color="#F3E8FF", text_color="#9C25EB",
-                 font=ctk.CTkFont(family="Inter", size=11, weight="bold")
-                 ).pack(side="left")
-
-    ctk.CTkLabel(card2_badge_wrap, text="Locomotive Engine Types",
-                 font=ctk.CTkFont(family="Inter", size=int(15 * scale), weight="bold"),
-                 text_color="#581C87").pack(side="left", padx=(10, 0))
-
-    engine_types_val_lbl = ctk.CTkLabel(card2, text="",
-                                         font=ctk.CTkFont(family="Inter", size=int(14 * scale), weight="bold"),
-                                         text_color="#94A3B8", anchor="nw", justify="left", wraplength=350)
-    engine_types_val_lbl.pack(anchor="nw", padx=24, pady=20, fill="both", expand=True)
-
-    # ── Section 3: Description Card (Green Theme) ──
-    card3 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card3.pack(fill="x", padx=12, pady=6)
-
-    card3_hdr = ctk.CTkFrame(card3, fg_color="#F0FDF4", height=48, corner_radius=0)
-    card3_hdr.pack(fill="x")
-    card3_hdr.pack_propagate(False)
-
-    card3_badge_wrap = ctk.CTkFrame(card3_hdr, fg_color="transparent")
-    card3_badge_wrap.pack(side="left", padx=16)
-
-    ctk.CTkLabel(card3_badge_wrap, text="Ai", width=28, height=28,
-                 corner_radius=6, fg_color="#DCFCE7", text_color="#15803D",
-                 font=ctk.CTkFont(family="Inter", size=11, weight="bold")
-                 ).pack(side="left")
-
-    ctk.CTkLabel(card3_badge_wrap, text="Description",
-                 font=ctk.CTkFont(family="Inter", size=int(15 * scale), weight="bold"),
-                 text_color="#14532D").pack(side="left", padx=(10, 0))
-
-
+    # Calculate dynamic description before creating UI cards
     initial_desc = data.get("ai_description")
     if not initial_desc:
-        # Calculate a deterministic fallback description from results
         railroad_counts = {}
         railroad_type_breakdown = {}
         for p_img in paths:
@@ -606,74 +543,199 @@ def open_train_lot_detail(parent_app, lot_id):
         else:
             initial_desc = "This lot contains detailed train slide analysis. Engine classifications and railroad identities are extracted using deep neural network pipelines."
 
-    desc_val_lbl = ctk.CTkLabel(card3, text=initial_desc,
-                                 font=ctk.CTkFont(family="Inter", size=int(13 * scale)),
-                                 text_color="#4B5563", anchor="nw", justify="left", wraplength=350)
-    desc_val_lbl.pack(anchor="nw", padx=24, pady=16, fill="both", expand=True)
+    # ── Section 1: Generated Title Card (Blue Theme) ──
+    card1 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
+    card1.pack(fill="x", padx=20, pady=(20, 10))
 
-    # ── Section 4: Active Slide Metadata (Slate Theme) ──
-    card4 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card4.pack(fill="x", padx=12, pady=(6, 12))
+    card1_hdr = ctk.CTkFrame(card1, fg_color="#EFF6FF", height=48, corner_radius=0)
+    card1_hdr.pack(fill="x")
+    card1_hdr.pack_propagate(True)
 
-    card4_hdr = ctk.CTkFrame(card4, fg_color="#F1F5F9", height=48, corner_radius=0)
-    card4_hdr.pack(fill="x")
-    card4_hdr.pack_propagate(False)
+    card1_badge_wrap = ctk.CTkFrame(card1_hdr, fg_color="transparent")
+    card1_badge_wrap.pack(side="left", padx=16, pady=10)
 
-    card4_badge_wrap = ctk.CTkFrame(card4_hdr, fg_color="transparent")
-    card4_badge_wrap.pack(side="left", padx=16)
-
-    ctk.CTkLabel(card4_badge_wrap, text="Slide", width=42, height=28,
-                 corner_radius=6, fg_color="#E2E8F0", text_color="#475569",
-                 font=ctk.CTkFont(family="Inter", size=11, weight="bold")
+    ctk.CTkLabel(card1_badge_wrap, text="Ai", width=28, height=28,
+                 corner_radius=6, fg_color="#DBEAFE", text_color="#2563EB",
+                 font=ctk.CTkFont(family="Inter", size=19, weight="bold")
                  ).pack(side="left")
 
-    ctk.CTkLabel(card4_badge_wrap, text="Active Slide Metadata",
-                 font=ctk.CTkFont(family="Inter", size=int(14 * scale), weight="bold"),
-                 text_color="#334155").pack(side="left", padx=(10, 0))
+    ctk.CTkLabel(card1_badge_wrap, text="Generated Title",
+                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
+                 text_color="#1E3A8A").pack(side="left", padx=(10, 0))
+
+    def _on_edit_title():
+        from tkinter import simpledialog
+        new_title = simpledialog.askstring("Edit Title", "Modify Lot Title:", parent=win, initialvalue=title_val_lbl.cget("text"))
+        if new_title:
+            title_val_lbl.configure(text=new_title)
+            data["title"] = new_title
+
+    edit_btn = ctk.CTkButton(card1_hdr, text="Edit", width=48, height=28,
+                             fg_color="transparent", text_color="#2563EB", hover_color="#DBEAFE",
+                             font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                             command=_on_edit_title)
+    edit_btn.pack(side="right", padx=16)
+
+    # Dynamic default title
+    total_slides = len(paths)
+    unique_rr = sorted(list({results.get(p, {}).get("railroad") for p in paths if results.get(p, {}).get("railroad") and results.get(p, {}).get("railroad") not in ["-", "Unprocessed", "Pending Analysis"]}))
+    unique_types = sorted(list({results.get(p, {}).get("loco_type") for p in paths if results.get(p, {}).get("loco_type") and results.get(p, {}).get("loco_type") not in ["-", "Unprocessed", "Pending Analysis"]}))
+    
+    rr_str = ", ".join(unique_rr) if unique_rr else "Unknown Railroad"
+    type_str = ", ".join([t.replace("LOCOMOTIVE", "").strip().lower() for t in unique_types]) if unique_types else "locomotives"
+    if not type_str.endswith('s'): type_str += "s"
+    
+    default_title = f"{total_slides} Slides Featuring {rr_str} {type_str.title()}"
+    custom_title = data.get("title", default_title)
+
+    title_val_lbl = ctk.CTkLabel(card1, text=custom_title,
+                                 font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
+                                 text_color="#111827", anchor="nw", justify="left", wraplength=350)
+    title_val_lbl.pack(anchor="nw", padx=32, pady=28, fill="both", expand=True)
+
+    # ── Section 2: Generated Description (Purple Theme) ──
+    card2 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
+    card2.pack(fill="x", padx=20, pady=10)
+
+    card2_hdr = ctk.CTkFrame(card2, fg_color="#FAF5FF", height=48, corner_radius=0)
+    card2_hdr.pack(fill="x")
+    card2_hdr.pack_propagate(True)
+
+    card2_badge_wrap = ctk.CTkFrame(card2_hdr, fg_color="transparent")
+    card2_badge_wrap.pack(side="left", padx=16, pady=10)
+
+    ctk.CTkLabel(card2_badge_wrap, text="Ai", width=28, height=28,
+                 corner_radius=6, fg_color="#F3E8FF", text_color="#9C25EB",
+                 font=ctk.CTkFont(family="Inter", size=19, weight="bold")
+                 ).pack(side="left")
+
+    ctk.CTkLabel(card2_badge_wrap, text="Generated Description",
+                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
+                 text_color="#581C87").pack(side="left", padx=(10, 0))
+
+    def _on_edit_description():
+        from tkinter import simpledialog
+        new_desc = simpledialog.askstring("Edit Description", "Modify Lot Description:", parent=win, initialvalue=desc_val_lbl.cget("text"))
+        if new_desc:
+            desc_val_lbl.configure(text=new_desc)
+            data["ai_description"] = new_desc
+
+    desc_edit_btn = ctk.CTkButton(card2_hdr, text="Edit", width=48, height=28,
+                                  fg_color="transparent", text_color="#9C25EB", hover_color="#F3E8FF",
+                                  font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                                  command=_on_edit_description)
+    desc_edit_btn.pack(side="right", padx=16)
+
+    desc_val_lbl = ctk.CTkLabel(card2, text=initial_desc,
+                                 font=ctk.CTkFont(family="Inter", size=22),
+                                 text_color="#000000", anchor="nw", justify="left", wraplength=350)
+    desc_val_lbl.pack(anchor="nw", padx=32, pady=24, fill="both", expand=True)
+
+    # ── Section 3: Detected Traits (Slate Theme with beautiful badges) ──
+    card3 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
+    card3.pack(fill="x", padx=20, pady=10)
+
+    card3_hdr = ctk.CTkFrame(card3, fg_color="#F9FAFB", height=48, corner_radius=0)
+    card3_hdr.pack(fill="x")
+    card3_hdr.pack_propagate(True)
+
+    card3_badge_wrap = ctk.CTkFrame(card3_hdr, fg_color="transparent")
+    card3_badge_wrap.pack(side="left", padx=16, pady=10)
+
+    ctk.CTkLabel(card3_badge_wrap, text="🏷", width=28, height=28,
+                 corner_radius=6, fg_color="#F3F4F6", text_color="#4B5563",
+                 font=ctk.CTkFont(family="Inter", size=21, weight="bold")
+                 ).pack(side="left")
+
+    ctk.CTkLabel(card3_badge_wrap, text="Detected Traits",
+                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
+                 text_color="#111827").pack(side="left", padx=(10, 0))
+
+    card3_body = ctk.CTkFrame(card3, fg_color="transparent")
+    card3_body.pack(fill="both", expand=True, padx=32, pady=24)
+
+    def _create_trait_widget(parent, label_text, bg_color, border_color, text_color):
+        container = ctk.CTkFrame(parent, fg_color="transparent")
+        container.pack(fill="x", pady=8, anchor="w")
+        
+        lbl = ctk.CTkLabel(container, text=label_text,
+                           font=ctk.CTkFont(family="Inter", size=19, weight="bold"),
+                           text_color="#6B7280", anchor="w")
+        lbl.pack(anchor="w")
+        
+        badge_frame = ctk.CTkFrame(container, fg_color=bg_color, border_width=1, border_color=border_color, corner_radius=8)
+        badge_frame.pack(anchor="w", pady=(4, 0))
+        
+        val_lbl = ctk.CTkLabel(badge_frame, text="-",
+                               font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                               text_color=text_color, padx=16, pady=8)
+        val_lbl.pack()
+        return val_lbl
+
+    lbl_local_railroad = _create_trait_widget(card3_body, "Predominant Railroad", "#FFFBEB", "#FEF3C7", "#B45309")
+    lbl_local_type = _create_trait_widget(card3_body, "Locomotive Type", "#ECEBFF", "#D7CFFF", "#6109B4")
+    lbl_local_conf = _create_trait_widget(card3_body, "Confidence Score", "#EFF6FF", "#DBEAFE", "#1D4ED8")
+    lbl_local_parts = _create_trait_widget(card3_body, "All Locomotive Types in Slides", "#F3F4F6", "#E5E7EB", "#374151")
+
+    # ── Section 4: Lot Information (Bottom Card) ──
+    card4 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
+    card4.pack(fill="x", padx=20, pady=(10, 20))
+
+    card4_hdr = ctk.CTkFrame(card4, fg_color="#F9FAFB", height=48, corner_radius=0)
+    card4_hdr.pack(fill="x")
+    card4_hdr.pack_propagate(True)
+
+    card4_badge_wrap = ctk.CTkFrame(card4_hdr, fg_color="transparent")
+    card4_badge_wrap.pack(side="left", padx=16, pady=10)
+
+    ctk.CTkLabel(card4_badge_wrap, text="📊", width=28, height=28,
+                 corner_radius=6, fg_color="#F3F4F6", text_color="#4B5563",
+                 font=ctk.CTkFont(family="Inter", size=21, weight="bold")
+                 ).pack(side="left")
+
+    ctk.CTkLabel(card4_badge_wrap, text="Lot Information",
+                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
+                 text_color="#111827").pack(side="left", padx=(10, 0))
 
     card4_body = ctk.CTkFrame(card4, fg_color="transparent")
-    card4_body.pack(fill="both", expand=True, padx=20, pady=16)
+    card4_body.pack(fill="both", expand=True, padx=32, pady=24)
 
-    def _create_local_field(parent, label_text):
+    def _create_info_row(parent, label_text, value_text):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", pady=4)
+        row.pack(fill="x", pady=8)
         
-        lbl = ctk.CTkLabel(row, text=label_text, 
-                           font=ctk.CTkFont(family="Inter", size=int(12 * scale), weight="bold"),
-                           text_color="#64748B", anchor="w")
+        lbl = ctk.CTkLabel(row, text=label_text,
+                           font=ctk.CTkFont(family="Inter", size=20),
+                           text_color="#6B7280", anchor="w")
         lbl.pack(side="left")
         
-        val = ctk.CTkLabel(row, text="", 
-                           font=ctk.CTkFont(family="Inter", size=int(12 * scale)),
-                           text_color="#334155", anchor="w", justify="left")
-        val.pack(side="left", padx=(10, 0), fill="x", expand=True)
+        val = ctk.CTkLabel(row, text=value_text,
+                           font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                           text_color="#111827", anchor="e")
+        val.pack(side="right")
         return val
 
-    lbl_local_railroad = _create_local_field(card4_body, "Railroad:")
-    lbl_local_conf = _create_local_field(card4_body, "Confidence:")
-    lbl_local_type = _create_local_field(card4_body, "Loco Type:")
-    lbl_local_parts = _create_local_field(card4_body, "Parts:")
+    total_images_val = _create_info_row(card4_body, "Total Images", f"{len(paths)}")
+    lot_number_val = _create_info_row(card4_body, "Lot Number", f"{lot_id}")
+
+    # Lot ID label at the very bottom of the right panel
+    lot_id_lbl = ctk.CTkLabel(right_panel, text=f"Lot ID: {lot_id}",
+                              font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                              text_color="#6B7280")
+    lot_id_lbl.grid(row=1, column=0, sticky="w", padx=16, pady=(4, 12))
 
     # Dynamic Wrapping helper for clean professional look (prevents text clipping/overflow)
     def _update_label_wrapping():
         if not win.winfo_exists(): return
         try:
-            rw = right_panel.winfo_width()
+            rw = res_scroll.winfo_width()
             if rw < 100:
                 rw = 300 # safe fallback
             
-            # Card values (Railroads, Engine Types, Description)
-            card_wp = max(120, rw - 90)
-            railroads_val_lbl.configure(wraplength=card_wp)
-            engine_types_val_lbl.configure(wraplength=card_wp)
+            # Card values (Title, Description)
+            card_wp = max(120, rw - 40)
+            title_val_lbl.configure(wraplength=card_wp)
             desc_val_lbl.configure(wraplength=card_wp)
-            
-            # Metadata fields (Card 4 values)
-            meta_wp = max(120, rw - 180)
-            lbl_local_railroad.configure(wraplength=meta_wp)
-            lbl_local_conf.configure(wraplength=meta_wp)
-            lbl_local_type.configure(wraplength=meta_wp)
-            lbl_local_parts.configure(wraplength=meta_wp)
         except Exception:
             pass
 
@@ -687,11 +749,10 @@ def open_train_lot_detail(parent_app, lot_id):
         # Show loading spinner in the canvas
         main_lbl.show_loading()
 
-        # Hide navigation and scroll cues while loading for a clean look
+        # Disable navigation buttons while loading to prevent double-clicks
         try:
-            nav_frame.pack_forget()
-            left_cue.place_forget()
-            right_cue.place_forget()
+            prev_btn.configure(state="disabled")
+            next_btn.configure(state="disabled")
         except:
             pass
 
@@ -699,9 +760,7 @@ def open_train_lot_detail(parent_app, lot_id):
             """Update UI components after image processing is finished.
             This runs on the main thread via win.after.
             """
-            # Show navigation controls regardless of success or failure
             try:
-                nav_frame.pack(side="bottom", fill="x", pady=5)
                 update_scroll_cues()
             except:
                 pass
@@ -718,43 +777,34 @@ def open_train_lot_detail(parent_app, lot_id):
                 # Set the processed image
                 main_lbl.set_image(image_obj)
 
-            # Recalculate global stats across all slides
-            all_railroads = set()
-            all_types = set()
-            for p_path, r_res in results.items():
-                if r_res:
-                    rr = r_res.get("railroad")
-                    lt = r_res.get("loco_type")
-                    if rr and rr not in ["-", "Unprocessed"]:
-                        all_railroads.add(rr)
-                    if lt and lt not in ["-", "Unprocessed"]:
-                        all_types.add(lt)
-            if all_railroads:
-                unique_rr_str = ", ".join(sorted(list(all_railroads)))
-                railroads_val_lbl.configure(text=unique_rr_str, text_color="#1E293B")
-            else:
-                railroads_val_lbl.configure(text="Pending Analysis", text_color="#94A3B8")
-            if all_types:
-                unique_type_str = ", ".join(sorted(list(all_types)))
-                engine_types_val_lbl.configure(text=unique_type_str, text_color="#0D0D0D")
-            else:
-                engine_types_val_lbl.configure(text="Pending Analysis", text_color="#94A3B8")
+            # Recalculate title dynamically if not custom-edited
+            if not data.get("title"):
+                all_railroads = sorted(list({results.get(py, {}).get("railroad") for py in paths if results.get(py, {}).get("railroad") and results.get(py, {}).get("railroad") not in ["-", "Unprocessed", "Pending Analysis"]}))
+                all_types = sorted(list({results.get(py, {}).get("loco_type") for py in paths if results.get(py, {}).get("loco_type") and results.get(py, {}).get("loco_type") not in ["-", "Unprocessed", "Pending Analysis"]}))
+                
+                rr_str = ", ".join(all_railroads) if all_railroads else "Unknown Railroad"
+                type_str = ", ".join([t.replace("LOCOMOTIVE", "").strip().lower() for t in all_types]) if all_types else "locomotives"
+                if not type_str.endswith('s'): type_str += "s"
+                
+                dyn_title = f"{total_slides} Slides Featuring {rr_str} {type_str.title()}"
+                title_val_lbl.configure(text=dyn_title)
 
             # Update local slide metadata for the currently displayed image
             res = results.get(p, {})
             if res:
-                lbl_local_railroad.configure(text=res.get('railroad', '-'), text_color="#1E3A8A")
+                lbl_local_railroad.configure(text=res.get('railroad', '-'))
                 conf = res.get('confidence', 0)
                 lbl_local_conf.configure(text=f"{conf:.1%}" if isinstance(conf, float) else f"{conf}")
-                lbl_local_type.configure(text=res.get('loco_type', '-'), text_color="#581C87")
-                parts = res.get('parts_detected', [])
-                parts_str = ", ".join(parts) if parts else "None"
-                lbl_local_parts.configure(text=parts_str)
+                lbl_local_type.configure(text=res.get('loco_type', '-'))
             else:
-                lbl_local_railroad.configure(text="Unprocessed", text_color="#64748B")
+                lbl_local_railroad.configure(text="Unprocessed")
                 lbl_local_conf.configure(text="-")
-                lbl_local_type.configure(text="-", text_color="#64748B")
-                lbl_local_parts.configure(text="-")
+                lbl_local_type.configure(text="-")
+
+            # Update lot-level unique locomotive types
+            all_types_lot = sorted(list({results.get(py, {}).get("loco_type") for py in paths if results.get(py, {}).get("loco_type") and results.get(py, {}).get("loco_type") not in ["-", "Unprocessed", "Pending Analysis"]}))
+            unique_types_str = ", ".join(all_types_lot) if all_types_lot else "Pending Analysis"
+            lbl_local_parts.configure(text=unique_types_str)
 
             # Adjust wrapping based on current window size
             _update_label_wrapping()
@@ -849,12 +899,7 @@ def open_train_lot_detail(parent_app, lot_id):
         nonlocal thumb_widgets
         new_idx = idx_var.get()
         
-        # Grid thumbs_scroll now that thumbnails are ready!
-        try:
-            if not thumbs_scroll.winfo_viewable():
-                thumbs_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
-        except:
-            pass
+
         
         if not thumb_widgets:
             for ch in thumbs_scroll.winfo_children():
@@ -960,11 +1005,17 @@ def open_train_lot_detail(parent_app, lot_id):
             return
         if bw == _detail_last_bw[0]: return
         _detail_last_bw[0] = bw
-        left = int(bw * 0.55)
+        left = int(bw * 0.60)
         left = max(220, min(left, bw - 220))
         right = max(220, bw - left)
         body.grid_columnconfigure(0, weight=0, minsize=left)
         body.grid_columnconfigure(1, weight=1, minsize=right)
+        
+        # Add 3% left and right padding dynamically
+        left_pad = max(12, int(bw * 0.03))
+        right_pad = max(12, int(bw * 0.03))
+        left_panel.grid_configure(padx=(left_pad, 6))
+        right_panel.grid_configure(padx=(6, right_pad))
 
     # Defer render until layout is stabilized (Matches Book OCR)
     def _deferred_init():
