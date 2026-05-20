@@ -38,16 +38,17 @@ def setup_portable_paths():
     # Force EasyOCR to use local folder
     os.environ["EASYOCR_MODULE_PATH"] = os.path.join(MODELS_DIR, "easyocr")
     
-    # Force MinerU model source (if needed)
-    # os.environ["MINERU_MODEL_SOURCE"] = "modelscope"
+    # Force PaddleOCR to use local folder
+    os.environ["PADDLEOCR_BASE_DIR"] = os.path.join(MODELS_DIR, "paddleocr")
     
-    # Force Torch Cache
+    # Force Torch Cache (used by YOLO and Siamese)
     os.environ["TORCH_HOME"] = os.path.join(MODELS_DIR, "torch")
     
     # Ensure directories exist
     os.makedirs(MODELS_DIR, exist_ok=True)
     os.makedirs(os.path.join(MODELS_DIR, "torch"), exist_ok=True)
     os.makedirs(os.path.join(MODELS_DIR, "easyocr"), exist_ok=True)
+    os.makedirs(os.path.join(MODELS_DIR, "paddleocr"), exist_ok=True)
 
 def check_disk_space(required_gb=10):
     """Checks if there is enough free space on the drive where the app is located."""
@@ -102,7 +103,7 @@ def health_check(progress_callback=None):
                     
                     if name:
                         models.append(name)
-                required = ["minicpm-v:latest", "llama3.2:1b"]
+                required = ["minicpm-v:latest", "llama3.2:1b", "llama3:latest"]
                 for r in required:
                     # Check both with and without tag
                     found = False

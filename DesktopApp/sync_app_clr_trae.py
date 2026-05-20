@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import customtkinter as ctk
 import os
 import sys
@@ -44,6 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -283,6 +285,7 @@ class DBConnector:
         
         for attempt in range(1, max_retries + 1):
             try:
+                # pyrefly: ignore [import-unresolved, missing-import]
                 from pymongo import MongoClient
                 # Fast timeout: 3 seconds is enough for a healthy connection
                 self.client = MongoClient(self.uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
@@ -363,6 +366,7 @@ class DBConnector:
 class SyncApp(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self.C = C
         self.title("Rail & Road — Book Sync")
 
         # Window sizing — 90% of screen, centered
@@ -416,6 +420,29 @@ class SyncApp(ctk.CTk):
             ocr_pipeline.LOG_CALLBACK = self._log
         except Exception as e:
             self._log(f"⚠️ Could not hook OCR logs: {e}")
+
+        # Graceful close protocol handler
+        self.protocol("WM_DELETE_WINDOW", self._on_app_close)
+
+    def _on_app_close(self):
+        """Handle app close event by stopping any running background threads safely first."""
+        try:
+            self._log("👋 Closing application gracefully...")
+            self.sync_running = False
+            # Allow a short delay for threads to exit
+            self.after(200, self._destroy_app_safely)
+        except Exception:
+            self.destroy()
+
+    def _destroy_app_safely(self):
+        try:
+            # Force destroy all widgets and child windows
+            for win in list(self._detail_windows.values()):
+                try: win.destroy()
+                except: pass
+            self.destroy()
+        except Exception:
+            pass
 
     def _get_os_scale(self):
         """
@@ -991,8 +1018,8 @@ class SyncApp(ctk.CTk):
                                 desc="Automatically analyze your scanned slides with AI to extract colors, logos, text, and catalog-ready details.",
                                 bg="#8C7B5D", title_color="#FFFFFF", desc_color="#E5E5E5",
                                 icon_bg="#AA9874",
-                                cmd=lambda: self._browse_folder("slides"),
-                                active=False, # Deactivated as requested
+                                cmd=lambda: self._open_train_slides_app(mode="folder"),
+                                active=True,
                                 width=None, height=None, border_color="#E4E7EC",
                                 title_size=17, desc_size=14, wrap=218, icon_pady=(0, self._px(48)),
                                 icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "upload_icon.png"))
@@ -1011,10 +1038,9 @@ class SyncApp(ctk.CTk):
         m_slides_btn = ctk.CTkButton(upload_pair, text="Process Single Lot of Slides",
                               height=55, corner_radius=12,
                               font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
-                              fg_color="transparent", border_width=2, border_color="#D1D5DB",
-                              text_color="#6B7280", hover_color="#F3F4F6",
-                              state="disabled", # Disabled for now
-                              command=lambda: self._browse_manual("slides"))
+                              fg_color="transparent", border_width=2, border_color="#8C7B5D",
+                              text_color="#8C7B5D", hover_color="#F5F2EC",
+                              command=lambda: self._open_train_slides_app(mode="files"))
         m_slides_btn.grid(row=1, column=0, sticky="ew", padx=8, pady=(12, 0))
 
         m_books_btn = ctk.CTkButton(upload_pair, text="Process Single Book Files",
@@ -1338,6 +1364,43 @@ class SyncApp(ctk.CTk):
         self.row_order.append(book_id)
 
         def _open_detail(_e=None):
+            # Check if this is a Train Lot
+            current_type = type_lbl.cget("text")
+            if current_type == "Train Lot":
+                current_status = badge.cget("text")
+                if "Failed" in current_status:
+                    stored_err = self.activity_rows[book_id].get("error_msg")
+                    if stored_err:
+                        messagebox.showerror("Processing Failed", f"Lot {book_id} failed.\n\nReason: {stored_err}")
+                    else:
+                        messagebox.showinfo("Failed", f"Lot {book_id} failed to process.")
+                    return
+                if current_status != "Complete":
+                    self._log(f"ℹ️ Detail view unavailable: {book_id} is still {current_status}")
+                    return
+                
+                # Debounce and loading cursor
+                if getattr(self, "_opening_train_lot", False):
+                    return
+                self._opening_train_lot = True
+                self.configure(cursor="watch")
+                
+                def _do_open():
+                    try:
+                        import sys
+                        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+                        from train_slides_ui import open_train_lot_detail
+                        open_train_lot_detail(self, book_id)
+                    except Exception as ex:
+                        messagebox.showerror("Error", f"Failed to open Train Lot details: {str(ex)}")
+                    finally:
+                        self.configure(cursor="")
+                        self.after(500, lambda: setattr(self, "_opening_train_lot", False))
+                
+                # Schedule the heavy UI creation to allow the cursor to update immediately
+                self.after(10, _do_open)
+                return
+
             # Check connection first - User request: show "you are offline" if clicked while disconnected
             if not (self.db_connector and self.db_connector.connected):
                 messagebox.showwarning("Offline", "You are offline. Please connect to view details.")
@@ -2946,6 +3009,297 @@ class SyncApp(ctk.CTk):
             threading.Thread(target=self._manual_worker, args=(groups,), daemon=True).start()
 
         threading.Thread(target=_check_and_start_manual, daemon=True).start()
+
+    def _open_train_slides_app(self, mode="folder"):
+        import datetime
+        import threading
+        from pathlib import Path
+        
+        # Check if custom train slide weights exist before proceeding
+        try:
+            from train_slides_logic import get_analyzer
+            analyzer = get_analyzer()
+            missing_weights = []
+            if not os.path.exists(analyzer.yolo_parts_model):
+                missing_weights.append("best.pt (Locomotive parts detector)")
+            if not os.path.exists(analyzer.siamese_weights):
+                missing_weights.append("siamese_best.pth (Siamese Classifier)")
+            if not os.path.exists(analyzer.val_emb_file):
+                missing_weights.append("val_embeddings.json (Railroad embeddings)")
+                
+            if missing_weights:
+                missing_list_str = "\n".join([f" • {w}" for w in missing_weights])
+                messagebox.showerror(
+                    "Missing Custom Weights",
+                    "The following custom model weights are required but could not be located:\n\n"
+                    f"{missing_list_str}\n\n"
+                    "Please download these files and place them in a 'weights/' folder next to the application executable."
+                )
+                return
+        except Exception as e_check:
+            messagebox.showerror("Error", f"Failed to verify model weights: {e_check}")
+            return
+
+        supported = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+
+        # Natural sort function for filenames
+        def natural_sort_key(s):
+            import re
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+
+        def get_lot_id_from_filename(file_path):
+            base = os.path.splitext(os.path.basename(file_path))[0]
+            if "_" in base:
+                parts = base.rsplit('_', 1)
+                if parts[1].isdigit():
+                    return parts[0]
+            return base
+
+        if mode == "folder":
+            folder = filedialog.askdirectory(title="Select Train Slides Folder")
+            if not folder:
+                return
+            folder_path = os.path.normpath(folder)
+            try:
+                image_files = [str(p) for p in Path(folder_path).glob("*.*") if p.suffix.lower() in supported]
+            except Exception:
+                image_files = []
+        else:
+            files = filedialog.askopenfilenames(title="Select Train Slide Images", 
+                                                filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp *.bmp")])
+            if not files:
+                return
+            image_files = list(files)
+            
+            # Smart Auto-Pickup: If user selects only one slide, look for siblings in same folder with same Lot ID
+            if len(image_files) == 1:
+                first_file = image_files[0]
+                folder = os.path.dirname(first_file)
+                prefix = get_lot_id_from_filename(first_file)
+                
+                # Find all siblings matching this Lot ID
+                siblings = [os.path.join(folder, f) for f in os.listdir(folder)
+                            if get_lot_id_from_filename(os.path.join(folder, f)) == prefix
+                            and os.path.splitext(f)[1].lower() in supported]
+                
+                if len(siblings) > 1:
+                    image_files = list(set(image_files + siblings))
+                    self._log(f"🔎 Auto-detected {len(siblings)} related slides for Lot: {prefix}")
+
+        if not image_files:
+            messagebox.showwarning("No Images", "No matching images found to process.")
+            return
+
+        # Group all images into lots by naming convention
+        raw_lots = {}
+        for f in image_files:
+            lid = get_lot_id_from_filename(f)
+            if lid not in raw_lots:
+                raw_lots[lid] = []
+            raw_lots[lid].append(f)
+
+        # Sort the lot files naturally and sort the lot keys naturally
+        lots = {}
+        sorted_lids = sorted(raw_lots.keys(), key=natural_sort_key)
+        for lid in sorted_lids:
+            flist = raw_lots[lid]
+            flist.sort(key=natural_sort_key)
+            lots[lid] = flist
+
+        # Prepare sync results structure but do not pre-insert Queued rows to keep the UI clean
+        ts = datetime.datetime.now().strftime("%I:%M %p")
+
+        # Process each lot sequentially in a single background thread
+        def _bg_process_all():
+            self.sync_running = True
+            self.after(0, lambda: self.btn_stop.configure(state="normal"))
+            self._log("🚀 Train Slides sync started!")
+
+            try:
+                from train_slides_logic import get_analyzer
+                analyzer = get_analyzer()
+            except Exception as ex:
+                err_str = str(ex)
+                for lid in lots:
+                    self.after(0, lambda l=lid, err=err_str: self.update_activity_row(l, "Failed", "Train Lot", ts, error_msg=err))
+                self.sync_running = False
+                self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+                return
+
+            for lid, flist in lots.items():
+                if not self.sync_running:
+                    self.after(0, lambda l=lid: self.update_activity_row(l, "Skipped", "Train Lot", ts))
+                    continue
+
+                self.after(0, lambda l=lid: self.update_activity_row(l, "Processing", "Train Lot", ts))
+                lot_results = {}
+                try:
+                    for idx, img_path in enumerate(flist):
+                        if not self.sync_running:
+                            break
+                        res = analyzer.analyze_image(img_path, log_fn=self._log)
+                        lot_results[img_path] = res
+                        prog = f"Proc ({idx+1}/{len(flist)})"
+                        self.after(0, lambda l=lid, p=prog: self.update_activity_row(l, p, "Train Lot", ts))
+                        
+                    if not self.sync_running:
+                        self.after(0, lambda l=lid: self.update_activity_row(l, "Stopped", "Train Lot", ts))
+                    else:
+                        self.after(0, lambda l=lid: self.update_activity_row(l, "AI Summary...", "Train Lot", ts))
+                        
+                        # 1. Compile lot statistics first to build fallback description
+                        railroad_counts = {}
+                        railroad_type_breakdown = {}
+
+                        for p_img in flist:
+                            r_res = lot_results.get(p_img, {})
+                            if not r_res:
+                                continue
+                            rr = r_res.get("railroad")
+                            lt = r_res.get("loco_type")
+                            
+                            if not rr or rr in ["-", "Unprocessed", "Pending Analysis"]:
+                                continue
+                            if not lt or lt in ["-", "Unprocessed", "Pending Analysis"]:
+                                continue
+                                
+                            railroad_counts[rr] = railroad_counts.get(rr, 0) + 1
+                            if rr not in railroad_type_breakdown:
+                                railroad_type_breakdown[rr] = {}
+                            railroad_type_breakdown[rr][lt] = railroad_type_breakdown[rr].get(lt, 0) + 1
+
+                        ai_desc = "This lot contains detailed train slide analysis. Engine classifications and railroad identities are extracted using deep neural network pipelines."
+                        
+                        if railroad_counts:
+                            self._log(f"   -> Analyzing statistics for {len(railroad_counts)} railroads...")
+                            total_slides = len(flist)
+                            railroads_list = sorted(list(railroad_counts.keys()))
+                            railroads_str = ", ".join(railroads_list)
+                            suffix = "Railroad" if len(railroads_list) == 1 else "Railroads"
+                            
+                            desc_prefix = ""
+                            
+                            # Build a detailed, formatted string of only the detected data
+                            breakdown_items = []
+                            for rr, types in railroad_type_breakdown.items():
+                                lt_names = []
+                                for lt in types.keys():
+                                    name = lt.lower().replace("locomotive", "").strip()
+                                    if not name: name = "locomotive"
+                                    if not name.endswith('s'): name += "s"
+                                    lt_names.append(name)
+                                
+                                if len(lt_names) > 1:
+                                    types_str = ", ".join(lt_names[:-1]) + " and " + lt_names[-1]
+                                else:
+                                    types_str = lt_names[0] if lt_names else "locomotives"
+                                
+                                breakdown_items.append(f"{rr} {types_str}")
+                            
+                            if len(breakdown_items) > 2:
+                                breakdown_str = ", ".join(breakdown_items[:-1]) + ", and " + breakdown_items[-1]
+                            elif len(breakdown_items) == 2:
+                                breakdown_str = f"{breakdown_items[0]} and {breakdown_items[1]}"
+                            elif breakdown_items:
+                                breakdown_str = breakdown_items[0]
+                            else:
+                                breakdown_str = f"{total_slides} locomotive slides"
+
+                            # Generate deterministic fallback
+                            fallback_note = f"This lot contains slides of {breakdown_str}."
+                            ai_desc = desc_prefix + fallback_note
+
+                            # 2. Synchronously generate dynamic AI Lot description in the processing thread!
+                            try:
+                                import time
+                                start_time = time.time()
+                                
+                                # Force using the 8B model as requested
+                                active_model = "llama3:latest"
+                                need_unload = True # 4.7GB model needs VRAM cleared
+                                
+                                # ── GPU Cleanup: Unload Slide models to free VRAM for LLaMA ────
+                                try:
+                                    analyzer.unload_models(log_fn=self._log)
+                                except Exception as e_unload:
+                                    self._log(f"  ⚠️ GPU flush warning: {e_unload}")
+
+                                self._log(f"🤖 [Ollama] Querying model '{active_model}' for dynamic lot description (Lot: {lid})...")
+
+                                prompt = (
+                                    f"You are an expert railway archival cataloguer.\n"
+                                    f"Please write a single, natural, and professional sentence summarizing the contents of this train lot based ONLY on the data below.\n\n"
+                                    f"Extracted Data: {breakdown_str}\n\n"
+                                    "CRITICAL INSTRUCTIONS:\n"
+                                    "1. Write a fluent, conversational sentence.\n"
+                                    "2. DO NOT use any numbers or slide counts.\n"
+                                    "3. DO NOT invent or add any locomotive builders (e.g. EMD, Alco), models, or locations.\n"
+                                    "4. Output ONLY the final sentence. No introductory filler, no quotes, no extra text.\n\n"
+                                    "Example: This lot features slides of BNSF and Santa Fe diesel locomotives, along with Union Pacific steam engines."
+                                )
+
+                                # pyrefly: ignore [missing-import]
+                                import ollama
+                                response = ollama.chat(
+                                    model=active_model,
+                                    messages=[{
+                                        "role": "user",
+                                        "content": prompt
+                                    }]
+                                )
+                                possible_note = response.get("message", {}).get("content", "").strip()
+                                if possible_note.startswith("'") and possible_note.endswith("'"):
+                                    possible_note = possible_note[1:-1]
+                                elif possible_note.startswith('"') and possible_note.endswith('"'):
+                                    possible_note = possible_note[1:-1]
+                                    
+                                # Strip conversational filler from LLM
+                                filler_prefixes = ["here is", "sure", "output:", "description:", "the final sentence is", "this lot features", "locomotive notes:", "note:", "this lot contains"]
+                                lower_note = possible_note.lower()
+                                for _ in range(3):
+                                    for prefix in filler_prefixes:
+                                        if lower_note.startswith(prefix):
+                                            possible_note = possible_note[len(prefix):].strip(" :\n\"'")
+                                            lower_note = possible_note.lower()
+                                if possible_note:
+                                    possible_note = possible_note[0].upper() + possible_note[1:]
+                                else:
+                                    possible_note = fallback_note
+                                    
+                                possible_desc = desc_prefix + possible_note
+                                
+                                # Clean up common meta-garbage patterns from bad LLMs
+                                bad_patterns = ["archival lot description", "this description", "provides an overview", "focuses on", "the language used", "states that", "without unnecessary", "in the provided stats", "the provided statistics"]
+                                is_garbage = any(pat in possible_desc.lower() for pat in bad_patterns)
+                                
+                                if is_garbage or len(possible_note.strip()) < 8:
+                                    possible_desc = desc_prefix + fallback_note
+                                    
+                                if possible_desc:
+                                    ai_desc = possible_desc
+                                    duration = time.time() - start_time
+                                    self._log(f"✅ [Ollama] Finished in {duration:.2f}s using '{active_model}'!")
+                                    self._log(f"   -> Summary: \"{ai_desc}\"")
+                            except Exception as e_desc:
+                                self._log(f"⚠️ [Ollama] Generation failed: {e_desc}")
+                                self._log(f"   -> Caching default fallback lot description instead.")
+                            finally:
+                                # Cache the full complete lot structure under last_sync_results only now!
+                                self.last_sync_results[lid] = {
+                                    "files": flist,
+                                    "results": lot_results,
+                                    "ai_description": ai_desc
+                                }
+                                self.after(0, lambda l=lid: self.update_activity_row(l, "Complete", "Train Lot", ts))
+                except Exception as ex:
+                    err_str = str(ex)
+                    self.after(0, lambda l=lid, err=err_str: self.update_activity_row(l, "Failed", "Train Lot", ts, error_msg=err))
+
+            self.sync_running = False
+            self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+            self._log("⏹ Train Slides sync finished or stopped.")
+
+        threading.Thread(target=_bg_process_all, daemon=True).start()
 
     def _manual_worker(self, books):
         """Processes only the specific books selected manually and then stops."""
