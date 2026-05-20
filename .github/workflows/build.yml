@@ -49,10 +49,15 @@ jobs:
         --add-data "DesktopApp/column_cropper.py;." `
         --add-data "DesktopApp/mineru_without_preprocessing_old.py;." `
         --add-data "DesktopApp/isbn_extractor_ui.py;." `
+        --add-data "DesktopApp/train_slides_ui.py;." `
+        --add-data "DesktopApp/train_slides_logic.py;." `
+        --add-data "DesktopApp/siamese_train.py;." `
         --collect-all magic-pdf `
         --collect-all easyocr `
-        --collect-all doclayout_yolo `
+        --collect-all doclayout-yolo `
         --collect-all ultralytics `
+        --collect-all paddleocr `
+        --collect-all paddle `
         DesktopApp/sync_app_clr_trae.py
     
     - name: Upload Artifact
