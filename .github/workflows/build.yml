@@ -14,7 +14,7 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'  # 3.11 is slightly more stable for some AI libs on Windows
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -35,9 +35,6 @@ jobs:
         echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
     
     - name: Build EXE
-      # --onedir is MUCh faster and more stable for large AI libraries
-      # --collect-all ensures complex libs like magic-pdf/easyocr are fully bundled
-      # We explicitly include all local script dependencies
       run: |
         pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
         --add-data "DesktopApp/icons;icons" `
@@ -57,13 +54,14 @@ jobs:
         --collect-all doclayout-yolo `
         --collect-all ultralytics `
         --collect-all paddleocr `
-        --collect-all ppocr `
-        --collect-all paddlex `
         --collect-all paddle `
         --collect-all shapely `
         --collect-all pyclipper `
         --collect-all lmdb `
         --collect-all imgaug `
+        --collect-data paddleocr `
+        --hidden-import=paddle.fluid `
+        --hidden-import=paddle.framework `
         DesktopApp/sync_app_clr_trae.py
     
     - name: Compress Build with 7-Zip (Ultra)
