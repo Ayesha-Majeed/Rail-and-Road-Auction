@@ -10,30 +10,77 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
-    
+
+    # ── Python 3.10 — last version with official PaddlePaddle 2.6.1 Windows wheel ──
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
+        python-version: '3.10'
+
+    # ── FIX 1: Upgrade build tools FIRST to fix the pkg_resources / cryptography error ──
+    - name: Upgrade pip, setuptools, wheel
+      run: python -m pip install --upgrade pip setuptools wheel
+
+    # ── FIX 2: Install heavy ML libs in the right order to avoid numpy conflicts ──
+    # Install numpy 1.26.4 first and pin it before anything else can override it
+    - name: Pin numpy for PaddleOCR compatibility
+      run: pip install "numpy==1.26.4"
+
+    # Install torch CPU-only (no CUDA needed for CI build — models run on user machine)
+    - name: Install PyTorch (CPU)
+      run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+    # Install PaddlePaddle CPU wheel for Windows / Python 3.10
+    - name: Install PaddlePaddle
+      run: pip install paddlepaddle==2.6.1 --find-links https://www.paddlepaddle.org.cn/whl/windows/mkl/avx/stable.html
+
+    # Install PaddleOCR after paddle is pinned
+    - name: Install PaddleOCR
+      run: pip install "paddleocr==2.7.3" --no-deps
+    # --no-deps prevents paddleocr from overriding numpy/opencv we've already pinned
+
+    # Install OpenCV headless pinned to a version compatible with numpy 1.26.x
+    - name: Install OpenCV
+      run: pip install "opencv-python-headless==4.8.1.78"
+
+    # ── FIX 3: Install everything else, EXCLUDING the packages we've already installed ──
+    # magic-pdf[full] is excluded here — it's a 2GB+ pull that breaks CI.
+    # It bundles paddle, torch, and opencv internally which conflict with our pins.
+    # The EXE should ship WITHOUT magic-pdf bundled; users install models at runtime.
+    - name: Install remaining dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r DesktopApp/requirements.txt pyinstaller
-    
+        pip install `
+          customtkinter `
+          "pymongo[srv]" `
+          dnspython `
+          pillow `
+          cryptography --only-binary=:all: `
+          python-dotenv `
+          doclayout-yolo `
+          loguru `
+          ollama `
+          requests `
+          certifi `
+          easyocr `
+          ultralytics `
+          pyinstaller
+
+    # ── Secrets from GitHub Actions Secrets (Settings → Secrets → Actions) ──
+    # Store these as repository secrets, NOT hardcoded in this file.
     - name: Create default config
       run: |
-        echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
-    
+        echo '{"mongo_uri":"${{ secrets.MONGO_URI }}","db_name":"${{ secrets.DB_NAME }}","collection":"${{ secrets.COLLECTION }}","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
+
     - name: Create .env for build
       run: |
-        echo "MONGO_URI=mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" > DesktopApp/.env
-        echo "DB_NAME=Test" >> DesktopApp/.env
-        echo "COLLECTION=Book Data" >> DesktopApp/.env
-        echo "GOOGLE_BOOKS_API_KEY=AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" >> DesktopApp/.env
+        echo "MONGO_URI=${{ secrets.MONGO_URI }}" > DesktopApp/.env
+        echo "DB_NAME=${{ secrets.DB_NAME }}" >> DesktopApp/.env
+        echo "COLLECTION=${{ secrets.COLLECTION }}" >> DesktopApp/.env
+        echo "GOOGLE_BOOKS_API_KEY=${{ secrets.GOOGLE_BOOKS_API_KEY }}" >> DesktopApp/.env
         echo "VISION_MODEL=minicpm-v:latest" >> DesktopApp/.env
         echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
-    
+
+    # ── Build EXE ──────────────────────────────────────────────────────────────
     - name: Build EXE
       run: |
         pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
@@ -49,25 +96,22 @@ jobs:
         --add-data "DesktopApp/train_slides_ui.py;." `
         --add-data "DesktopApp/train_slides_logic.py;." `
         --add-data "DesktopApp/siamese_train.py;." `
-        --collect-all magic-pdf `
         --collect-all easyocr `
-        --collect-all doclayout-yolo `
+        --collect-all doclayout_yolo `
         --collect-all ultralytics `
         --collect-all paddleocr `
-        --collect-all paddle `
+        --collect-all paddlepaddle `
         --collect-all shapely `
         --collect-all pyclipper `
-        --collect-all lmdb `
-        --collect-all imgaug `
-        --collect-data paddleocr `
         --hidden-import=paddle.fluid `
         --hidden-import=paddle.framework `
+        --hidden-import=PIL._tkinter_finder `
         DesktopApp/sync_app_clr_trae.py
-    
+
     - name: Compress Build with 7-Zip (Ultra)
       run: |
         7z a -mx=9 BookSync-Windows-Portable.zip ./dist/BookSync/*
-    
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
