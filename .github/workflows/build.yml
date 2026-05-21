@@ -58,6 +58,7 @@ jobs:
         --collect-all ultralytics `
         --collect-all paddleocr `
         --collect-all ppocr `
+        --collect-all paddlex `
         --collect-all paddle `
         --collect-all shapely `
         --collect-all pyclipper `
