@@ -4,6 +4,46 @@ import os
 import sys
 import platform
 import ssl
+import traceback
+
+# ─── Global Exception Catcher for Windows Debugging (IMMEDIATE) ───
+def _global_log_exception(exc_type, exc_value, exc_tb):
+    try:
+        # Determine executable directory safely
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(sys.argv[0] or "."))
+    except Exception:
+        base_dir = "."
+        
+    log_path = os.path.join(base_dir, "syna_error.log")
+    tb_lines = traceback.format_exception(exc_type, exc_value, exc_tb)
+    tb_text = "".join(tb_lines)
+    
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("=== Uncaught Application Exception ===\n")
+            f.write(tb_text)
+    except Exception:
+        pass
+        
+    try:
+        from tkinter import messagebox
+        messagebox.showerror(
+            "Application Error",
+            f"An unexpected error occurred during execution.\n\n"
+            f"A detailed crash report has been saved to:\n{log_path}\n\n"
+            f"Error: {exc_value}\n\n"
+            f"Traceback:\n{tb_text[:1000]}"
+        )
+    except Exception:
+        pass
+        
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _global_log_exception
+
 
 # ─── SSL Certificate Fix for Windows / PyInstaller (IMMEDIATE) ───
 try:
@@ -3118,6 +3158,9 @@ class SyncApp(ctk.CTk):
             try:
                 from train_slides_logic import get_analyzer
                 analyzer = get_analyzer()
+                analyzer._should_close_popup = False
+                analyzer._popup_shown = False
+                analyzer._popup_win = None
             except Exception as ex:
                 err_str = str(ex)
                 for lid in lots:
@@ -3137,7 +3180,53 @@ class SyncApp(ctk.CTk):
                     for idx, img_path in enumerate(flist):
                         if not self.sync_running:
                             break
-                        res = analyzer.analyze_image(img_path, log_fn=self._log)
+                        def _model_cb(msg, pct):
+                            if "Download" in msg or "Loading" in msg:
+                                short_msg = "Init Models..." if "Loading" in msg else "Downloading..."
+                                self.after(0, lambda l=lid, m=short_msg: self.update_activity_row(l, m, "Train Lot", ts))
+                                
+                                if "Download" in msg and not getattr(analyzer, "_popup_shown", False):
+                                    analyzer._popup_shown = True
+                                    def _show_popup():
+                                        if getattr(analyzer, "_should_close_popup", False):
+                                            return
+                                        w, h = 400, 200
+                                        win = ctk.CTkToplevel(self)
+                                        win.title("Downloading Models")
+                                        win.geometry(f"{self._px(w)}x{self._px(h)}")
+                                        win.attributes("-topmost", True)
+                                        win.grab_set()
+                                        
+                                        self.update_idletasks()
+                                        px, py = self.winfo_x(), self.winfo_y()
+                                        pw, ph = self.winfo_width(), self.winfo_height()
+                                        win.geometry(f"+{px + (pw - self._px(w))//2}+{py + (ph - self._px(h))//2}")
+                                        
+                                        lbl = ctk.CTkLabel(win, text="Downloading PaddleOCR...", 
+                                                        font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
+                                                        text_color=C["text"])
+                                        lbl.pack(pady=(self._px(40), self._px(20)))
+                                        
+                                        prog = ctk.CTkProgressBar(win, width=self._px(360), height=self._px(12),
+                                                                progress_color=C["olive"], fg_color=C["border"])
+                                        prog.pack(pady=self._px(10))
+                                        prog.configure(mode="indeterminate")
+                                        prog.start()
+                                        
+                                        status = ctk.CTkLabel(win, text="Please wait. This is a one-time download...", 
+                                                            font=ctk.CTkFont(family="Inter", size=self.F["label"]),
+                                                            text_color=C["muted"])
+                                        status.pack(pady=self._px(5))
+                                        analyzer._popup_win = win
+                                    self.after(0, _show_popup)
+                                    
+                            elif "success" in msg.lower():
+                                analyzer._should_close_popup = True
+                                if getattr(analyzer, "_popup_win", None):
+                                    self.after(0, lambda: analyzer._popup_win.destroy() if analyzer._popup_win.winfo_exists() else None)
+                                    analyzer._popup_win = None
+                        
+                        res = analyzer.analyze_image(img_path, log_fn=self._log, progress_callback=_model_cb)
                         lot_results[img_path] = res
                         prog = f"Proc ({idx+1}/{len(flist)})"
                         self.after(0, lambda l=lid, p=prog: self.update_activity_row(l, p, "Train Lot", ts))

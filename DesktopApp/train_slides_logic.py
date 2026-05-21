@@ -1,15 +1,40 @@
 import os
 import sys
+# pyrefly: ignore [missing-import]
 import cv2
 import json
+# pyrefly: ignore [missing-import]
 import torch
+# pyrefly: ignore [missing-import]
 import numpy as np
 import threading
 from PIL import Image
+# pyrefly: ignore [missing-import]
 from paddleocr import PaddleOCR
+# pyrefly: ignore [missing-import]
 import torchvision.transforms as T
 import warnings
 import logging
+# -------------------------------------------------
+# Global exception catcher – logs any uncaught exception to a file
+# -------------------------------------------------
+import traceback
+
+def _log_exception(exc_type, exc_value, exc_tb):
+    # Determine a safe location next to the running script / executable
+    try:
+        base_dir = os.path.dirname(sys.argv[0] or ".")
+    except Exception:
+        base_dir = "."
+    log_path = os.path.join(base_dir, "syna_error.log")
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("=== Uncaught Exception ===\n")
+        traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+    # Also forward to the default handler so console shows trace
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+# Register our handler
+sys.excepthook = _log_exception
 
 # Suppress warnings
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
@@ -19,7 +44,7 @@ warnings.filterwarnings("ignore")
 
 # Safely import YOLO
 try:
-    # pyrefly: ignore [import-untyped]
+    # pyrefly: ignore [missing-import]
     from ultralytics import YOLO
 except ImportError:
     pass
@@ -89,40 +114,65 @@ class TrainSlidesAnalyzer:
         self.gallery_emb = None
         self.gallery_labels = None
 
-    def load_models(self):
+    def load_models(self, progress_callback=None):
         with self.lock:
             if self.loaded: return
             print("Loading Train Slide Models...")
+            if progress_callback:
+                progress_callback("Loading YOLO models...", 10)
+                
             self.yolo_train = YOLO(self.yolo_train_model)
             self.yolo_parts = YOLO(self.yolo_parts_model)
-            try:
-                self.ocr = PaddleOCR(use_angle_cls=False, lang='en', use_gpu=torch.cuda.is_available())
-            except Exception as e:
-                err_str = str(e)
-                if "use_gpu" in err_str or "use_angle_cls" in err_str or "Unknown argument" in err_str:
-                    dev = "gpu" if torch.cuda.is_available() else "cpu"
-                    try:
-                        self.ocr = PaddleOCR(
-                            use_doc_orientation_classify=False,
-                            use_doc_unwarping=False,
-                            use_textline_orientation=False,
-                            lang='en',
-                            device=dev
-                        )
-                    except Exception as inner_e:
-                        try:
-                            self.ocr = PaddleOCR(lang='en')
-                        except Exception as final_e:
-                            raise RuntimeError(
-                                f"PaddleOCR failed to initialize. If you are on Windows, you may be missing "
-                                f"the Microsoft Visual C++ Redistributable or dependent DLLs.\n\nDetails: {final_e}"
-                            ) from final_e
+            
+            # Determine if we actually need to download PaddleOCR models (first run)
+            if progress_callback:
+                import os
+                user_paddle_dir = os.path.expanduser("~/.paddleocr")
+                is_first_run = not os.path.exists(user_paddle_dir) or not os.listdir(user_paddle_dir)
+                
+                if is_first_run:
+                    progress_callback("Downloading PaddleOCR models... (First run only)", 30)
                 else:
-                    raise RuntimeError(
-                        f"PaddleOCR failed to initialize. If you are on Windows, you may need to install the "
-                        f"Microsoft Visual C++ Redistributable.\n\nDetails: {e}"
-                    ) from e
+                    progress_callback("Loading PaddleOCR models...", 30)
 
+            # Let PaddleOCR auto-download to its default ~/.paddleocr cache
+            try:
+                self.ocr = PaddleOCR(
+                    use_angle_cls=False,
+                    lang='en',
+                    use_gpu=torch.cuda.is_available()
+                )
+            except Exception as e:
+                # If any of the above arguments are not supported, fall back.
+                err_str = str(e)
+                if "det_model_dir" in err_str or "rec_model_dir" in err_str:
+                    dev = "gpu" if torch.cuda.is_available() else "cpu"
+                    self.ocr = PaddleOCR(lang='en', device=dev)
+                else:
+                    if "use_gpu" in err_str or "use_angle_cls" in err_str or "Unknown argument" in err_str:
+                        dev = "gpu" if torch.cuda.is_available() else "cpu"
+                        try:
+                            self.ocr = PaddleOCR(
+                                use_doc_orientation_classify=False,
+                                use_doc_unwarping=False,
+                                use_textline_orientation=False,
+                                lang='en',
+                                device=dev
+                            )
+                        except Exception as inner_e:
+                            try:
+                                self.ocr = PaddleOCR(lang='en')
+                            except Exception as final_e:
+                                raise RuntimeError(
+                                    f"PaddleOCR failed to initialize. Details: {final_e}"
+                                ) from final_e
+                    else:
+                        raise RuntimeError(
+                            f"PaddleOCR failed to initialize. Details: {e}"
+                        ) from e
+
+            if progress_callback:
+                progress_callback("Loading Siamese network...", 80)
             
             self.siamese = SiameseNetwork().to(self.device)
             self.siamese.load_state_dict(torch.load(self.siamese_weights, map_location=self.device, weights_only=True))
@@ -132,6 +182,9 @@ class TrainSlidesAnalyzer:
                 gallery_data = json.load(f)
             self.gallery_emb = np.array(gallery_data['embeddings'])
             self.gallery_labels = np.array(gallery_data['labels'])
+            
+            if progress_callback:
+                progress_callback("Models loaded successfully.", 100)
             
             self.loaded = True
         print("Models loaded successfully.")
@@ -143,7 +196,7 @@ class TrainSlidesAnalyzer:
         new_img.paste(img, ((max_side - w) // 2, (max_side - h) // 2))
         return new_img.resize((target_size, target_size), Image.BICUBIC)
 
-    def analyze_image(self, img_path, log_fn=None):
+    def analyze_image(self, img_path, log_fn=None, progress_callback=None):
         def log(msg):
             if log_fn:
                 log_fn(msg)
@@ -152,7 +205,7 @@ class TrainSlidesAnalyzer:
 
         if not self.loaded:
             log("Initializing models...")
-            self.load_models()
+            self.load_models(progress_callback=progress_callback)
             
         filename = os.path.basename(img_path)
         log(f"\n[Processing Slide] File: {filename}")
