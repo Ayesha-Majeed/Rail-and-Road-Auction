@@ -3,7 +3,7 @@ pymongo[srv]
 dnspython
 pillow
 cryptography
-opencv-python-headless
+opencv-python-headless==4.8.1.78
 python-dotenv
 doclayout-yolo
 loguru
@@ -15,5 +15,6 @@ requests
 certifi
 easyocr
 ultralytics
+numpy==1.26.4
 paddlepaddle==2.6.2
 paddleocr==2.7.3
