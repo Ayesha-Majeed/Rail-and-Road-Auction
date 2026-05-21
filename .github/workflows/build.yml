@@ -57,12 +57,21 @@ jobs:
         --collect-all doclayout-yolo `
         --collect-all ultralytics `
         --collect-all paddleocr `
+        --collect-all ppocr `
         --collect-all paddle `
+        --collect-all shapely `
+        --collect-all pyclipper `
+        --collect-all lmdb `
+        --collect-all imgaug `
         DesktopApp/sync_app_clr_trae.py
+    
+    - name: Compress Build with 7-Zip (Ultra)
+      run: |
+        7z a -mx=9 BookSync-Windows-Portable.zip ./dist/BookSync/*
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: BookSync-Windows-Portable
-        path: dist/BookSync/
+        path: BookSync-Windows-Portable.zip
         retention-days: 3
