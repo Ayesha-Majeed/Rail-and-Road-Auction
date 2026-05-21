@@ -2,6 +2,7 @@ import os
 import threading
 from pathlib import Path
 from PIL import Image as PILImage, ImageDraw, ImageTk
+# pyrefly: ignore [missing-import]
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import Canvas
@@ -725,19 +726,71 @@ def open_train_lot_detail(parent_app, lot_id):
     lot_id_lbl.grid(row=1, column=0, sticky="w", padx=16, pady=(4, 12))
 
     # Dynamic Wrapping helper for clean professional look (prevents text clipping/overflow)
-    def _update_label_wrapping():
+    _last_res_scroll_w = [0]
+    def _update_label_wrapping(event=None):
         if not win.winfo_exists(): return
         try:
             rw = res_scroll.winfo_width()
             if rw < 100:
-                rw = 300 # safe fallback
+                rw = 450 # safe fallback matching final mapped layout (prevents launch jitter)
+            if rw == _last_res_scroll_w[0]:
+                return
+            _last_res_scroll_w[0] = rw
             
             # Card values (Title, Description)
-            card_wp = max(120, rw - 40)
+            # Mathematically correct printable width: rw - (20px card padding * 2) - (32px label padding * 2) = rw - 104px.
+            # We use 112px to guarantee a safe margin from the scrollbar.
+            card_wp = max(120, rw - 112)
             title_val_lbl.configure(wraplength=card_wp)
             desc_val_lbl.configure(wraplength=card_wp)
+            lbl_local_parts.configure(wraplength=max(100, card_wp - 36))
         except Exception:
             pass
+
+    right_loader = [None]
+    is_first_open = [True]
+    
+    def _show_right_loader():
+        if not win.winfo_exists(): return
+        if right_loader[0] is not None: return
+        
+        # Loader covering the scrollable frame
+        loader_frame = ctk.CTkFrame(right_panel, fg_color="#F8FAFC", corner_radius=12)
+        loader_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        
+        loading_lbl = ctk.CTkLabel(loader_frame, text="Syncing Details...",
+                                   font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+                                   text_color="#6B7280")
+        loading_lbl.place(relx=0.5, rely=0.45, anchor="center")
+        
+        spinner_canvas = Canvas(loader_frame, width=36, height=36, bd=0, highlightthickness=0, bg="#F8FAFC")
+        spinner_canvas.place(relx=0.5, rely=0.56, anchor="center")
+        
+        arc = spinner_canvas.create_arc(4, 4, 32, 32, start=0, extent=280, style="arc", outline="#8C7B5D", width=3)
+        
+        state = {"angle": 0, "active": True}
+        def _spin():
+            if not win.winfo_exists() or not state["active"]:
+                return
+            state["angle"] = (state["angle"] + 15) % 360
+            try:
+                spinner_canvas.itemconfigure(arc, start=state["angle"])
+                win.after(30, _spin)
+            except:
+                pass
+                
+        _spin()
+        right_loader[0] = (loader_frame, state)
+
+    def _hide_right_loader():
+        if right_loader[0] is not None:
+            loader_frame, state = right_loader[0]
+            state["active"] = False
+            try:
+                loader_frame.destroy()
+            except:
+                pass
+            right_loader[0] = None
 
     def _render_main():
         """Asynchronously load and render the main image, then update UI components on the main thread."""
@@ -748,6 +801,8 @@ def open_train_lot_detail(parent_app, lot_id):
 
         # Show loading spinner in the canvas
         main_lbl.show_loading()
+        if is_first_open[0]:
+            _show_right_loader()
 
         # Disable navigation buttons while loading to prevent double-clicks
         try:
@@ -760,6 +815,12 @@ def open_train_lot_detail(parent_app, lot_id):
             """Update UI components after image processing is finished.
             This runs on the main thread via win.after.
             """
+            # Reset vertical scroll to the top for a smooth transition to the new slide
+            try:
+                res_scroll._parent_canvas.yview_moveto(0.0)
+            except:
+                pass
+
             try:
                 update_scroll_cues()
             except:
@@ -808,6 +869,9 @@ def open_train_lot_detail(parent_app, lot_id):
 
             # Adjust wrapping based on current window size
             _update_label_wrapping()
+            if is_first_open[0]:
+                _hide_right_loader()
+                is_first_open[0] = False
 
         def _worker():
             """Background thread to load the image and draw any bounding boxes."""
@@ -1042,6 +1106,10 @@ def open_train_lot_detail(parent_app, lot_id):
                 _stop_loader()
                 _render_main()
                 _render_thumbs()
+                
+                # Bind the resize event of the scrollable container ONLY AFTER initial layout is stable
+                # This completely prevents card packing events from triggering layout jitter on launch
+                res_scroll.bind("<Configure>", _update_label_wrapping)
                 return
             if attempt < 30:
                 win.after(40, lambda: _wait_layout_ready(attempt + 1))
@@ -1049,6 +1117,7 @@ def open_train_lot_detail(parent_app, lot_id):
                 _stop_loader()
                 _render_main()
                 _render_thumbs()
+                res_scroll.bind("<Configure>", _update_label_wrapping)
 
         win.after(100, _wait_layout_ready)
 
