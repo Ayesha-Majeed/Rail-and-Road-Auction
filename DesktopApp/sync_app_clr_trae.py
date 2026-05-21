@@ -3154,6 +3154,16 @@ class SyncApp(ctk.CTk):
             self.sync_running = True
             self.after(0, lambda: self.btn_stop.configure(state="normal"))
             self._log("🚀 Train Slides sync started!")
+            
+            # Force unload Ollama models from VRAM to make room for PyTorch
+            self._log("🧹 Clearing Ollama models from VRAM...")
+            try:
+                import requests
+                requests.post('http://localhost:11434/api/generate', json={'model': 'minicpm-v:latest', 'prompt': '', 'keep_alive': 0}, timeout=2)
+                requests.post('http://localhost:11434/api/generate', json={'model': 'llama3.2:1b', 'prompt': '', 'keep_alive': 0}, timeout=2)
+                requests.post('http://localhost:11434/api/generate', json={'model': 'llama3:latest', 'prompt': '', 'keep_alive': 0}, timeout=2)
+            except Exception:
+                pass
 
             try:
                 from train_slides_logic import get_analyzer
@@ -3202,7 +3212,7 @@ class SyncApp(ctk.CTk):
                                         pw, ph = self.winfo_width(), self.winfo_height()
                                         win.geometry(f"+{px + (pw - self._px(w))//2}+{py + (ph - self._px(h))//2}")
                                         
-                                        lbl = ctk.CTkLabel(win, text="Downloading PaddleOCR...", 
+                                        lbl = ctk.CTkLabel(win, text="Loading EasyOCR...", 
                                                         font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
                                                         text_color=C["text"])
                                         lbl.pack(pady=(self._px(40), self._px(20)))

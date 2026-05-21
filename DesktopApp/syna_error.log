@@ -1,0 +1,12 @@
+=== Uncaught Exception ===
+Traceback (most recent call last):
+  File "/home/kk/Desktop/webocr minoru/backend_integration/sync_app_clr_trae.py", line 4167, in <module>
+    app.mainloop()
+  File "/home/kk/Desktop/webocr minoru/venv/lib/python3.12/site-packages/customtkinter/windows/ctk_tk.py", line 165, in mainloop
+    super().mainloop(*args, **kwargs)
+  File "/usr/lib/python3.12/tkinter/__init__.py", line 1504, in mainloop
+    self.tk.mainloop(n)
+  File "/usr/lib/python3.12/tkinter/__init__.py", line 1962, in __call__
+    def __call__(self, *args):
+    
+KeyboardInterrupt

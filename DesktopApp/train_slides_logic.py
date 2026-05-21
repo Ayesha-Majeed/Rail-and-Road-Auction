@@ -1,5 +1,10 @@
 import os
 import sys
+
+# Set PyTorch memory allocation configuration before ANY torch imports
+# to prevent memory fragmentation and CUDA OutOfMemory errors during batch processing
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # pyrefly: ignore [missing-import]
 import cv2
 import json
@@ -10,7 +15,7 @@ import numpy as np
 import threading
 from PIL import Image
 # pyrefly: ignore [missing-import]
-from paddleocr import PaddleOCR
+import easyocr
 # pyrefly: ignore [missing-import]
 import torchvision.transforms as T
 import warnings
@@ -38,7 +43,6 @@ sys.excepthook = _log_exception
 
 # Suppress warnings
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-os.environ['PPOCR_LOG_LEVEL'] = 'ERROR'
 logging.disable(logging.WARNING)
 warnings.filterwarnings("ignore")
 
@@ -49,14 +53,7 @@ try:
 except ImportError:
     pass
 
-# Monkey-patch paddle.inference.Config to prevent set_optimization_level attribute errors in version mismatches
-try:
-    # pyrefly: ignore [import-untyped, missing-import]
-    import paddle.inference
-    if not hasattr(paddle.inference.Config, "set_optimization_level"):
-        paddle.inference.Config.set_optimization_level = lambda self, level: None
-except Exception:
-    pass
+
 
 try:
     from siamese_train import SiameseNetwork
@@ -109,7 +106,8 @@ class TrainSlidesAnalyzer:
         self.loaded = False
         self.yolo_train = None
         self.yolo_parts = None
-        self.ocr = None
+        self._ocr_reader = None
+        self._ocr_ready = False
         self.siamese = None
         self.gallery_emb = None
         self.gallery_labels = None
@@ -124,52 +122,27 @@ class TrainSlidesAnalyzer:
             self.yolo_train = YOLO(self.yolo_train_model)
             self.yolo_parts = YOLO(self.yolo_parts_model)
             
-            # Determine if we actually need to download PaddleOCR models (first run)
+            # Initialize shared EasyOCR reader (reuses the book-side singleton if available)
             if progress_callback:
-                import os
-                user_paddle_dir = os.path.expanduser("~/.paddleocr")
-                is_first_run = not os.path.exists(user_paddle_dir) or not os.listdir(user_paddle_dir)
-                
-                if is_first_run:
-                    progress_callback("Downloading PaddleOCR models... (First run only)", 30)
-                else:
-                    progress_callback("Loading PaddleOCR models...", 30)
+                progress_callback("Loading EasyOCR models...", 30)
 
-            # Let PaddleOCR auto-download to its default ~/.paddleocr cache
             try:
-                self.ocr = PaddleOCR(
-                    use_angle_cls=False,
-                    lang='en',
-                    use_gpu=torch.cuda.is_available()
-                )
-            except Exception as e:
-                # If any of the above arguments are not supported, fall back.
-                err_str = str(e)
-                if "det_model_dir" in err_str or "rec_model_dir" in err_str:
-                    dev = "gpu" if torch.cuda.is_available() else "cpu"
-                    self.ocr = PaddleOCR(lang='en', device=dev)
+                # Check for process-wide shared reader first (from main_mineru_ocr)
+                if hasattr(sys, '_shared_easyocr_reader') and sys._shared_easyocr_reader is not None:
+                    self._ocr_reader = sys._shared_easyocr_reader
                 else:
-                    if "use_gpu" in err_str or "use_angle_cls" in err_str or "Unknown argument" in err_str:
-                        dev = "gpu" if torch.cuda.is_available() else "cpu"
-                        try:
-                            self.ocr = PaddleOCR(
-                                use_doc_orientation_classify=False,
-                                use_doc_unwarping=False,
-                                use_textline_orientation=False,
-                                lang='en',
-                                device=dev
-                            )
-                        except Exception as inner_e:
-                            try:
-                                self.ocr = PaddleOCR(lang='en')
-                            except Exception as final_e:
-                                raise RuntimeError(
-                                    f"PaddleOCR failed to initialize. Details: {final_e}"
-                                ) from final_e
-                    else:
-                        raise RuntimeError(
-                            f"PaddleOCR failed to initialize. Details: {e}"
-                        ) from e
+                    gpu_bool = torch.cuda.is_available()
+                    self._ocr_reader = easyocr.Reader(['en'], gpu=gpu_bool)
+                    # Store for other modules to share
+                    sys._shared_easyocr_reader = self._ocr_reader
+                self._ocr_ready = True
+            except Exception as e:
+                self._ocr_error_msg = str(e)
+                self._ocr_ready = False
+                self._ocr_reader = None
+                print(f"[WARN] EasyOCR initialization failed: {self._ocr_error_msg}")
+                # The pipeline can still run YOLO parts; OCR steps will be skipped.
+
 
             if progress_callback:
                 progress_callback("Loading Siamese network...", 80)
@@ -238,31 +211,36 @@ class TrainSlidesAnalyzer:
         w_glob, h_glob = glob_crop_pil.size
         
         # 2. Local Emblem Crop (OCR)
-        log("  -> Step 2/5: Running PaddleOCR for local emblem/logo localization...")
-        glob_crop_cv = cv2.cvtColor(np.array(glob_crop_pil), cv2.COLOR_RGB2BGR)
-        ocr_results = self.ocr.ocr(glob_crop_cv, cls=True)
+        log("  -> Step 2/5: Running EasyOCR for local emblem/logo localization...")
         ocr_box = [int(w_glob * 0.5), int(h_glob * 0.35), int(w_glob * 0.95), int(h_glob * 0.70)]
         
-        if ocr_results and ocr_results[0]:
-            min_ox, min_oy = float('inf'), float('inf')
-            max_ox, max_oy = float('-inf'), float('-inf')
-            has_pure_string = False
-            for line in ocr_results[0]:
-                pts = np.array(line[0])
-                text = line[1][0]
-                if any(c.isalpha() for c in text) and not any(c.isdigit() for c in text):
-                    has_pure_string = True
-                ox1, oy1 = np.min(pts, axis=0)
-                ox2, oy2 = np.max(pts, axis=0)
-                min_ox, min_oy = min(min_ox, ox1), min(min_oy, oy1)
-                max_ox, max_oy = max(max_ox, ox2), max(max_oy, oy2)
-            if min_ox != float('inf') and has_pure_string:
-                margin = 35
-                ocr_box = [max(0, int(min_ox - margin)), max(0, int(min_oy - margin)),
-                           min(w_glob, int(max_ox + margin)), min(h_glob, int(max_oy + margin))]
+        if self._ocr_ready and self._ocr_reader is not None:
+            glob_crop_cv = cv2.cvtColor(np.array(glob_crop_pil), cv2.COLOR_RGB2BGR)
+            # Limit canvas_size to 1280 to prevent massive VRAM spikes on large high-res slides (e.g. 3000x2000+)
+            ocr_results = self._ocr_reader.readtext(glob_crop_cv, canvas_size=1280)
+        
+            if ocr_results:
+                min_ox, min_oy = float('inf'), float('inf')
+                max_ox, max_oy = float('-inf'), float('-inf')
+                has_pure_string = False
+                for (bbox, text, conf) in ocr_results:
+                    pts = np.array(bbox)
+                    if any(c.isalpha() for c in text) and not any(c.isdigit() for c in text):
+                        has_pure_string = True
+                    ox1, oy1 = np.min(pts, axis=0)
+                    ox2, oy2 = np.max(pts, axis=0)
+                    min_ox, min_oy = min(min_ox, ox1), min(min_oy, oy1)
+                    max_ox, max_oy = max(max_ox, ox2), max(max_oy, oy2)
+                if min_ox != float('inf') and has_pure_string:
+                    margin = 35
+                    ocr_box = [max(0, int(min_ox - margin)), max(0, int(min_oy - margin)),
+                               min(w_glob, int(max_ox + margin)), min(h_glob, int(max_oy + margin))]
+        else:
+            ocr_err = getattr(self, '_ocr_error_msg', 'EasyOCR not available')
+            log(f"     ⚠️ [EasyOCR] Skipped — {ocr_err}. Using default emblem region.")
                            
         ox1, oy1, ox2, oy2 = ocr_box
-        log(f"     [PaddleOCR] Emblem Crop Bounding box: [{ox1}, {oy1}, {ox2}, {oy2}]")
+        log(f"     [EasyOCR] Emblem Crop Bounding box: [{ox1}, {oy1}, {ox2}, {oy2}]")
         loc_crop_pil = glob_crop_pil.crop((ox1, oy1, ox2, oy2))
         
         # 3. Siamese Match
@@ -322,6 +300,10 @@ class TrainSlidesAnalyzer:
             loco_type = "LOCOMOTIVE CAR"
         log(f"     [Classification] Final Type: '{loco_type}'")
             
+        # Clear intermediate tensors from this slide before moving to next
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
         return {
             "railroad": pred_railroad,
             "confidence": match_conf,
@@ -344,10 +326,13 @@ class TrainSlidesAnalyzer:
             if not self.loaded: return
             log("🧹 [GPU VRAM Cleanup] Unloading Train Slide Models to free VRAM for LLaMA...")
             
-            # Delete PyTorch / PaddleOCR / YOLO model references
+            # Delete PyTorch / EasyOCR / YOLO model references
             self.yolo_train = None
             self.yolo_parts = None
-            self.ocr = None
+            self._ocr_reader = None
+            # Also clear the shared singleton so it can be re-initialized
+            if hasattr(sys, '_shared_easyocr_reader'):
+                sys._shared_easyocr_reader = None
             self.siamese = None
             self.gallery_emb = None
             self.gallery_labels = None

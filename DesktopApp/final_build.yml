@@ -1,0 +1,76 @@
+# .github/workflows/build.yml
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r DesktopApp/requirements.txt pyinstaller
+    
+    - name: Create default config
+      run: |
+        echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
+    
+    - name: Create .env for build
+      run: |
+        echo "MONGO_URI=mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" > DesktopApp/.env
+        echo "DB_NAME=Test" >> DesktopApp/.env
+        echo "COLLECTION=Book Data" >> DesktopApp/.env
+        echo "GOOGLE_BOOKS_API_KEY=AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" >> DesktopApp/.env
+        echo "VISION_MODEL=minicpm-v:latest" >> DesktopApp/.env
+        echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
+    
+    - name: Build EXE
+      run: |
+        pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
+        --add-data "DesktopApp/icons;icons" `
+        --add-data "DesktopApp/olive_high.json;." `
+        --add-data "DesktopApp/sync_config.json;." `
+        --add-data "DesktopApp/.env;." `
+        --add-data "DesktopApp/main_mineru_ocr.py;." `
+        --add-data "DesktopApp/model_manager.py;." `
+        --add-data "DesktopApp/column_cropper.py;." `
+        --add-data "DesktopApp/mineru_without_preprocessing_old.py;." `
+        --add-data "DesktopApp/isbn_extractor_ui.py;." `
+        --add-data "DesktopApp/train_slides_ui.py;." `
+        --add-data "DesktopApp/train_slides_logic.py;." `
+        --add-data "DesktopApp/siamese_train.py;." `
+        --collect-all magic-pdf `
+        --collect-all easyocr `
+        --collect-all doclayout-yolo `
+        --collect-all ultralytics `
+        --collect-all shapely `
+        --collect-all pyclipper `
+        --collect-all lmdb `
+        --collect-all imgaug `
+        --collect-all skimage `
+        --collect-all torchvision `
+        --hidden-import=skimage.morphology `
+        --hidden-import=skimage.filters `
+        --hidden-import=torchvision.transforms `
+        DesktopApp/sync_app_clr_trae.py
+    
+    - name: Compress Build with 7-Zip (Ultra)
+      run: |
+        7z a -mx=9 BookSync-Windows-Portable.zip ./dist/BookSync/*
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BookSync-Windows-Portable
+        path: BookSync-Windows-Portable.zip
+        retention-days: 3
