@@ -1,20 +1,43 @@
+# ── Core UI ───────────────────────────────────────────────────────────────────
 customtkinter
+python-dotenv
+pillow
+
+# ── Database ──────────────────────────────────────────────────────────────────
 pymongo[srv]
 dnspython
-pillow
-cryptography
-opencv-python-headless==4.8.1.78
-python-dotenv
-doclayout-yolo
-loguru
-torch
-torchvision
-ollama
-magic-pdf[full]
+
+# ── Network / SSL ─────────────────────────────────────────────────────────────
 requests
 certifi
-easyocr
-ultralytics
+cryptography           # install with --only-binary=:all: on CI to avoid build errors
+
+# ── ML / Vision ───────────────────────────────────────────────────────────────
+# numpy MUST be pinned to 1.26.x — PaddleOCR 2.7.3 is incompatible with numpy 2.x
 numpy==1.26.4
-paddlepaddle==2.6.2
-paddleocr==2.7.3
+
+# torch: install separately via --index-url for CPU or CUDA wheel
+# torch
+# torchvision
+
+# OpenCV: pinned to be compatible with numpy 1.26.x
+opencv-python-headless==4.8.1.78
+
+# PaddlePaddle: install separately via paddle's own index URL for the correct wheel
+# paddlepaddle==2.6.1
+
+# PaddleOCR: install with --no-deps after paddle and opencv are pinned
+# paddleocr==2.7.3
+
+ultralytics
+easyocr
+doclayout-yolo
+loguru
+
+# ── Ollama (LLM bridge) ───────────────────────────────────────────────────────
+ollama
+
+# ── NOTE: magic-pdf[full] is intentionally excluded from CI builds ─────────────
+# It is a 2GB+ package that conflicts with the numpy/paddle/torch pins above.
+# Install it manually in your local dev environment only:
+#   pip install "magic-pdf[full]"
