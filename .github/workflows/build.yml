@@ -23,7 +23,7 @@ jobs:
     
     - name: Install remaining dependencies
       run: |
-        pip install -r DesktopApp/requirements.txt pyinstaller
+        pip install --no-cache-dir --use-pep517 --prefer-binary --resolver=backtracking -r DesktopApp/requirements.txt pyinstaller
     
     - name: Create default config
       run: |
@@ -53,7 +53,6 @@ jobs:
         --add-data "DesktopApp/train_slides_ui.py;." `
         --add-data "DesktopApp/train_slides_logic.py;." `
         --add-data "DesktopApp/siamese_train.py;." `
-        --collect-all magic-pdf `
         --collect-all easyocr `
         --collect-all doclayout-yolo `
         --collect-all ultralytics `
