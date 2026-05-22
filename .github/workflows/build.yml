@@ -15,15 +15,18 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    
+
+    - name: Upgrade pip to latest
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+
     - name: Install PyTorch (pinned, fast)
       run: |
-        python -m pip install --upgrade pip
         pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu118
     
     - name: Install remaining dependencies
       run: |
-        pip install --no-cache-dir --use-pep517 --prefer-binary --resolver=backtracking -r DesktopApp/requirements.txt pyinstaller
+        pip install --no-cache-dir --use-pep517 --prefer-binary -r DesktopApp/requirements.txt pyinstaller
     
     - name: Create default config
       run: |
