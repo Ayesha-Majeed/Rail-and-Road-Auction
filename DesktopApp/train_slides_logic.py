@@ -58,14 +58,14 @@ except ImportError:
 try:
     from siamese_train import SiameseNetwork
 except ImportError:
-    # Append Siamese pipeline path for imports
-    SIAMESE_DIR = "/home/kk/Desktop/slides /Siamese_OCR_Pipeline"
-    if SIAMESE_DIR not in sys.path:
-        sys.path.append(SIAMESE_DIR)
+    # Dynamically resolve path: works for both dev (Linux) and frozen EXE (Windows)
+    _base = os.path.dirname(os.path.abspath(__file__)) if not getattr(sys, 'frozen', False) else os.path.dirname(sys.executable)
+    if _base not in sys.path:
+        sys.path.append(_base)
     try:
         from siamese_train import SiameseNetwork
     except ImportError as e:
-        print(f"Warning: SiameseNetwork not found. Please ensure {SIAMESE_DIR} exists and is correct. {e}")
+        print(f"Warning: SiameseNetwork not found. {e}")
 
 class TrainSlidesAnalyzer:
     def __init__(self):
