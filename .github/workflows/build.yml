@@ -66,16 +66,20 @@ jobs:
         --collect-all imgaug `
         --collect-all skimage `
         --collect-all torchvision `
+        --collect-all numpy `
+        --hidden-import=numpy `
         --hidden-import=yaml `
         --hidden-import=easyocr.easyocr `
         --hidden-import=skimage.morphology `
         --hidden-import=skimage.filters `
         --hidden-import=torchvision.transforms `
+        --hidden-import=dns `
+        --collect-all customtkinter `
         DesktopApp/sync_app_clr_trae.py
     
     - name: Compress Build with 7-Zip (Ultra)
       run: |
-        7z a -mx=3 BookSync-Windows-Portable.zip ./dist/BookSync/*
+        7z a -mx=3 -mmt=on BookSync-Windows-Portable.zip ./dist/BookSync/*
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
