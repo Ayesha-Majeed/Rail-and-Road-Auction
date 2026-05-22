@@ -75,7 +75,7 @@ jobs:
     
     - name: Compress Build with 7-Zip (Ultra)
       run: |
-        7z a -mx=9 BookSync-Windows-Portable.zip ./dist/BookSync/*
+        7z a -mx=3 BookSync-Windows-Portable.zip ./dist/BookSync/*
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
