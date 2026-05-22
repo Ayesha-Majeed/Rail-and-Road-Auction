@@ -3181,8 +3181,7 @@ class SyncApp(ctk.CTk):
 
             for lid, flist in lots.items():
                 if not self.sync_running:
-                    self.after(0, lambda l=lid: self.update_activity_row(l, "Skipped", "Train Lot", ts))
-                    continue
+                    break
 
                 self.after(0, lambda l=lid: self.update_activity_row(l, "Processing", "Train Lot", ts))
                 lot_results = {}
@@ -3390,6 +3389,18 @@ class SyncApp(ctk.CTk):
                                     "results": lot_results,
                                     "ai_description": ai_desc
                                 }
+                                # ── Unload Ollama from RAM after each lot ──────────────────────────
+                                # This frees CPU RAM so PyTorch models can reload for the next lot
+                                # without triggering a DefaultCPUAllocator OOM crash.
+                                try:
+                                    import requests as _req
+                                    for _m in ['llama3:latest', 'llama3.2:1b', 'minicpm-v:latest']:
+                                        _req.post('http://localhost:11434/api/generate',
+                                                  json={'model': _m, 'prompt': '', 'keep_alive': 0},
+                                                  timeout=3)
+                                    self._log("🧹 [RAM] Ollama models unloaded from RAM for next lot.")
+                                except Exception:
+                                    pass
                                 self.after(0, lambda l=lid: self.update_activity_row(l, "Complete", "Train Lot", ts))
                 except Exception as ex:
                     err_str = str(ex)

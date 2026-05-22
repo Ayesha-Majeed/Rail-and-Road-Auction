@@ -116,6 +116,23 @@ class TrainSlidesAnalyzer:
         with self.lock:
             if self.loaded: return
             print("Loading Train Slide Models...")
+
+            # ── Aggressive RAM/VRAM cleanup before loading ──
+            # Frees leftover memory from previous unload or Ollama session
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # Tell Ollama to release any lingering models from RAM
+            try:
+                import requests as _req
+                for _m in ['llama3:latest', 'llama3.2:1b', 'minicpm-v:latest']:
+                    _req.post('http://localhost:11434/api/generate',
+                              json={'model': _m, 'prompt': '', 'keep_alive': 0}, timeout=2)
+            except Exception:
+                pass
+            gc.collect()  # Second pass after Ollama release
+
             if progress_callback:
                 progress_callback("Loading YOLO models...", 10)
                 

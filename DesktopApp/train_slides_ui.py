@@ -544,25 +544,25 @@ def open_train_lot_detail(parent_app, lot_id):
         else:
             initial_desc = "This lot contains detailed train slide analysis. Engine classifications and railroad identities are extracted using deep neural network pipelines."
 
-    # ── Section 1: Generated Title Card (Blue Theme) ──
-    card1 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card1.pack(fill="x", padx=20, pady=(20, 10))
+    # ── Section 1: Generated Title Card ──
+    card1 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=1, border_color="#E2E8F0", corner_radius=12)
+    card1.pack(fill="x", padx=16, pady=(24, 12))
 
-    card1_hdr = ctk.CTkFrame(card1, fg_color="#EFF6FF", height=48, corner_radius=0)
-    card1_hdr.pack(fill="x")
+    card1_hdr = ctk.CTkFrame(card1, fg_color="#EFF6FF", height=44, corner_radius=8)
+    card1_hdr.pack(fill="x", padx=2, pady=(2, 0))
     card1_hdr.pack_propagate(True)
 
     card1_badge_wrap = ctk.CTkFrame(card1_hdr, fg_color="transparent")
-    card1_badge_wrap.pack(side="left", padx=16, pady=10)
+    card1_badge_wrap.pack(side="left", padx=8, pady=8)
 
     ctk.CTkLabel(card1_badge_wrap, text="Ai", width=28, height=28,
-                 corner_radius=6, fg_color="#DBEAFE", text_color="#2563EB",
-                 font=ctk.CTkFont(family="Inter", size=19, weight="bold")
+                 corner_radius=4, fg_color="#E0E7FF", text_color="#4338CA",
+                 font=ctk.CTkFont(family="Inter", size=18, weight="bold")
                  ).pack(side="left")
 
     ctk.CTkLabel(card1_badge_wrap, text="Generated Title",
-                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
-                 text_color="#1E3A8A").pack(side="left", padx=(10, 0))
+                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                 text_color="#334155").pack(side="left", padx=(8, 0))
 
     def _on_edit_title():
         from tkinter import simpledialog
@@ -571,11 +571,14 @@ def open_train_lot_detail(parent_app, lot_id):
             title_val_lbl.configure(text=new_title)
             data["title"] = new_title
 
-    edit_btn = ctk.CTkButton(card1_hdr, text="Edit", width=48, height=28,
-                             fg_color="transparent", text_color="#2563EB", hover_color="#DBEAFE",
-                             font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+    edit_btn = ctk.CTkButton(card1_hdr, text="✏ Edit", width=48, height=28,
+                             fg_color="transparent", text_color="#4338CA", hover_color="#EEF2FF",
+                             font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
                              command=_on_edit_title)
-    edit_btn.pack(side="right", padx=16)
+    edit_btn.pack(side="right", padx=8)
+    
+    # Thin divider line
+    ctk.CTkFrame(card1, fg_color="#F1F5F9", height=1).pack(fill="x", padx=2, pady=0)
 
     # Dynamic default title
     total_slides = len(paths)
@@ -590,29 +593,29 @@ def open_train_lot_detail(parent_app, lot_id):
     custom_title = data.get("title", default_title)
 
     title_val_lbl = ctk.CTkLabel(card1, text=custom_title,
-                                 font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
-                                 text_color="#111827", anchor="nw", justify="left", wraplength=350)
-    title_val_lbl.pack(anchor="nw", padx=32, pady=28, fill="both", expand=True)
+                                 font=ctk.CTkFont(family="Inter", size=21, weight="bold"),
+                                 text_color="#0F172A", anchor="nw", justify="left", wraplength=350)
+    title_val_lbl.pack(anchor="nw", padx=20, pady=16, fill="both", expand=True)
 
-    # ── Section 2: Generated Description (Purple Theme) ──
-    card2 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card2.pack(fill="x", padx=20, pady=10)
+    # ── Section 2: Generated Description Card ──
+    card2 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=1, border_color="#E2E8F0", corner_radius=12)
+    card2.pack(fill="x", padx=16, pady=12)
 
-    card2_hdr = ctk.CTkFrame(card2, fg_color="#FAF5FF", height=48, corner_radius=0)
-    card2_hdr.pack(fill="x")
+    card2_hdr = ctk.CTkFrame(card2, fg_color="#FAF5FF", height=44, corner_radius=8)
+    card2_hdr.pack(fill="x", padx=2, pady=(2, 0))
     card2_hdr.pack_propagate(True)
 
     card2_badge_wrap = ctk.CTkFrame(card2_hdr, fg_color="transparent")
-    card2_badge_wrap.pack(side="left", padx=16, pady=10)
+    card2_badge_wrap.pack(side="left", padx=8, pady=8)
 
     ctk.CTkLabel(card2_badge_wrap, text="Ai", width=28, height=28,
-                 corner_radius=6, fg_color="#F3E8FF", text_color="#9C25EB",
-                 font=ctk.CTkFont(family="Inter", size=19, weight="bold")
+                 corner_radius=4, fg_color="#F3E8FF", text_color="#9333EA",
+                 font=ctk.CTkFont(family="Inter", size=18, weight="bold")
                  ).pack(side="left")
 
     ctk.CTkLabel(card2_badge_wrap, text="Generated Description",
-                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
-                 text_color="#581C87").pack(side="left", padx=(10, 0))
+                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                 text_color="#334155").pack(side="left", padx=(8, 0))
 
     def _on_edit_description():
         from tkinter import simpledialog
@@ -621,98 +624,114 @@ def open_train_lot_detail(parent_app, lot_id):
             desc_val_lbl.configure(text=new_desc)
             data["ai_description"] = new_desc
 
-    desc_edit_btn = ctk.CTkButton(card2_hdr, text="Edit", width=48, height=28,
-                                  fg_color="transparent", text_color="#9C25EB", hover_color="#F3E8FF",
-                                  font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+    desc_edit_btn = ctk.CTkButton(card2_hdr, text="✏ Edit", width=48, height=28,
+                                  fg_color="transparent", text_color="#9333EA", hover_color="#FAF5FF",
+                                  font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
                                   command=_on_edit_description)
-    desc_edit_btn.pack(side="right", padx=16)
+    # desc_edit_btn.pack(side="right", padx=8) # Optionally hide this edit button to match screenshot exactly, but kept for functionality
+    
+    # Thin divider line
+    ctk.CTkFrame(card2, fg_color="#F1F5F9", height=1).pack(fill="x", padx=2, pady=0)
 
     desc_val_lbl = ctk.CTkLabel(card2, text=initial_desc,
-                                 font=ctk.CTkFont(family="Inter", size=22),
-                                 text_color="#000000", anchor="nw", justify="left", wraplength=350)
-    desc_val_lbl.pack(anchor="nw", padx=32, pady=24, fill="both", expand=True)
+                                 font=ctk.CTkFont(family="Inter", size=20),
+                                 text_color="#1E293B", anchor="nw", justify="left", wraplength=350)
+    desc_val_lbl.pack(anchor="nw", padx=20, pady=16, fill="both", expand=True)
 
-    # ── Section 3: Detected Traits (Slate Theme with beautiful badges) ──
-    card3 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card3.pack(fill="x", padx=20, pady=10)
+    # ── Section 3: Detected Traits Card ──
+    card3 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=1, border_color="#E2E8F0", corner_radius=12)
+    card3.pack(fill="x", padx=16, pady=12)
 
-    card3_hdr = ctk.CTkFrame(card3, fg_color="#F9FAFB", height=48, corner_radius=0)
-    card3_hdr.pack(fill="x")
+    card3_hdr = ctk.CTkFrame(card3, fg_color="#F8FAFC", height=44, corner_radius=8)
+    card3_hdr.pack(fill="x", padx=2, pady=(2, 0))
     card3_hdr.pack_propagate(True)
 
     card3_badge_wrap = ctk.CTkFrame(card3_hdr, fg_color="transparent")
-    card3_badge_wrap.pack(side="left", padx=16, pady=10)
+    card3_badge_wrap.pack(side="left", padx=8, pady=8)
 
-    ctk.CTkLabel(card3_badge_wrap, text="🏷", width=28, height=28,
-                 corner_radius=6, fg_color="#F3F4F6", text_color="#4B5563",
-                 font=ctk.CTkFont(family="Inter", size=21, weight="bold")
-                 ).pack(side="left")
+    try:
+        from PIL import Image
+        import os
+        traits_img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "traits.png")
+        traits_img = ctk.CTkImage(light_image=Image.open(traits_img_path), size=(18, 18))
+        traits_lbl = ctk.CTkLabel(card3_badge_wrap, text="", image=traits_img, width=24, height=24, fg_color="transparent")
+    except Exception:
+        traits_lbl = ctk.CTkLabel(card3_badge_wrap, text="🏷", width=28, height=28,
+                     corner_radius=4, fg_color="#F1F5F9", text_color="#64748B",
+                     font=ctk.CTkFont(family="Inter", size=19))
+    traits_lbl.pack(side="left")
 
     ctk.CTkLabel(card3_badge_wrap, text="Detected Traits",
-                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
-                 text_color="#111827").pack(side="left", padx=(10, 0))
+                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                 text_color="#334155").pack(side="left", padx=(8, 0))
+                 
+    # Thin divider line
+    ctk.CTkFrame(card3, fg_color="#F1F5F9", height=1).pack(fill="x", padx=2, pady=0)
 
     card3_body = ctk.CTkFrame(card3, fg_color="transparent")
-    card3_body.pack(fill="both", expand=True, padx=32, pady=24)
+    card3_body.pack(fill="both", expand=True, padx=20, pady=16)
 
     def _create_trait_widget(parent, label_text, bg_color, border_color, text_color):
         container = ctk.CTkFrame(parent, fg_color="transparent")
-        container.pack(fill="x", pady=8, anchor="w")
+        container.pack(fill="x", pady=6, anchor="w")
         
         lbl = ctk.CTkLabel(container, text=label_text,
-                           font=ctk.CTkFont(family="Inter", size=19, weight="bold"),
-                           text_color="#6B7280", anchor="w")
+                           font=ctk.CTkFont(family="Inter", size=17),
+                           text_color="#64748B", anchor="w")
         lbl.pack(anchor="w")
         
-        badge_frame = ctk.CTkFrame(container, fg_color=bg_color, border_width=1, border_color=border_color, corner_radius=8)
-        badge_frame.pack(anchor="w", pady=(4, 0))
+        badge_frame = ctk.CTkFrame(container, fg_color=bg_color, border_width=1, border_color=border_color, corner_radius=12)
+        badge_frame.pack(anchor="w", pady=(6, 0))
         
         val_lbl = ctk.CTkLabel(badge_frame, text="-",
-                               font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
-                               text_color=text_color, padx=16, pady=8)
-        val_lbl.pack()
+                               font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+                               text_color=text_color)
+        val_lbl.pack(padx=16, pady=8)
         return val_lbl
 
     lbl_local_railroad = _create_trait_widget(card3_body, "Predominant Railroad", "#FFFBEB", "#FEF3C7", "#B45309")
-    lbl_local_type = _create_trait_widget(card3_body, "Locomotive Type", "#ECEBFF", "#D7CFFF", "#6109B4")
+    lbl_local_type = _create_trait_widget(card3_body, "Locomotive Type", "#F3E8FF", "#E9D5FF", "#7E22CE")
     lbl_local_conf = _create_trait_widget(card3_body, "Confidence Score", "#EFF6FF", "#DBEAFE", "#1D4ED8")
-    lbl_local_parts = _create_trait_widget(card3_body, "All Locomotive Types in Slides", "#F3F4F6", "#E5E7EB", "#374151")
+    lbl_local_parts = _create_trait_widget(card3_body, "All Locomotive Types in Slides", "#F8FAFC", "#E2E8F0", "#475569")
 
-    # ── Section 4: Lot Information (Bottom Card) ──
-    card4 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=2, border_color="#CBD5E1", corner_radius=12)
-    card4.pack(fill="x", padx=20, pady=(10, 20))
+    # ── Section 4: Lot Information Card ──
+    card4 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=1, border_color="#E2E8F0", corner_radius=12)
+    card4.pack(fill="x", padx=16, pady=(12, 24))
 
-    card4_hdr = ctk.CTkFrame(card4, fg_color="#F9FAFB", height=48, corner_radius=0)
-    card4_hdr.pack(fill="x")
+    card4_hdr = ctk.CTkFrame(card4, fg_color="#F8FAFC", height=44, corner_radius=8)
+    card4_hdr.pack(fill="x", padx=2, pady=(2, 0))
     card4_hdr.pack_propagate(True)
 
     card4_badge_wrap = ctk.CTkFrame(card4_hdr, fg_color="transparent")
-    card4_badge_wrap.pack(side="left", padx=16, pady=10)
+    card4_badge_wrap.pack(side="left", padx=8, pady=8)
 
     ctk.CTkLabel(card4_badge_wrap, text="📊", width=28, height=28,
-                 corner_radius=6, fg_color="#F3F4F6", text_color="#4B5563",
-                 font=ctk.CTkFont(family="Inter", size=21, weight="bold")
+                 corner_radius=4, fg_color="#F1F5F9", text_color="#64748B",
+                 font=ctk.CTkFont(family="Inter", size=19)
                  ).pack(side="left")
 
     ctk.CTkLabel(card4_badge_wrap, text="Lot Information",
-                 font=ctk.CTkFont(family="Inter", size=22, weight="bold"),
-                 text_color="#111827").pack(side="left", padx=(10, 0))
+                 font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
+                 text_color="#334155").pack(side="left", padx=(8, 0))
+                 
+    # Thin divider line
+    ctk.CTkFrame(card4, fg_color="#F1F5F9", height=1).pack(fill="x", padx=2, pady=0)
 
     card4_body = ctk.CTkFrame(card4, fg_color="transparent")
-    card4_body.pack(fill="both", expand=True, padx=32, pady=24)
+    card4_body.pack(fill="both", expand=True, padx=20, pady=16)
 
     def _create_info_row(parent, label_text, value_text):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", pady=8)
+        row.pack(fill="x", pady=6)
         
         lbl = ctk.CTkLabel(row, text=label_text,
-                           font=ctk.CTkFont(family="Inter", size=20),
-                           text_color="#6B7280", anchor="w")
+                           font=ctk.CTkFont(family="Inter", size=19),
+                           text_color="#64748B", anchor="w")
         lbl.pack(side="left")
         
         val = ctk.CTkLabel(row, text=value_text,
-                           font=ctk.CTkFont(family="Inter", size=20, weight="bold"),
-                           text_color="#111827", anchor="e")
+                           font=ctk.CTkFont(family="Inter", size=19, weight="bold"),
+                           text_color="#1E293B", anchor="e")
         val.pack(side="right")
         return val
 
