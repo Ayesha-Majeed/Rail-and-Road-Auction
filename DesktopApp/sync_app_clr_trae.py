@@ -3130,6 +3130,8 @@ class SyncApp(ctk.CTk):
             messagebox.showwarning("No Images", "No matching images found to process.")
             return
 
+        self._clear_activity()
+
         # Group all images into lots by naming convention
         raw_lots = {}
         for f in image_files:

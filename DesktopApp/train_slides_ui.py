@@ -687,12 +687,15 @@ def open_train_lot_detail(parent_app, lot_id):
                                font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
                                text_color=text_color)
         val_lbl.pack(padx=16, pady=8)
+        val_lbl.container = container
         return val_lbl
 
     lbl_local_railroad = _create_trait_widget(card3_body, "Predominant Railroad", "#FFFBEB", "#FEF3C7", "#B45309")
     lbl_local_type = _create_trait_widget(card3_body, "Locomotive Type", "#F3E8FF", "#E9D5FF", "#7E22CE")
     lbl_local_conf = _create_trait_widget(card3_body, "Confidence Score", "#EFF6FF", "#DBEAFE", "#1D4ED8")
     lbl_local_parts = _create_trait_widget(card3_body, "All Locomotive Types in Slides", "#F8FAFC", "#E2E8F0", "#475569")
+    lbl_ocr_text = _create_trait_widget(card3_body, "Extracted OCR Text", "#ECFDF5", "#A7F3D0", "#047857")
+    lbl_ocr_conf = _create_trait_widget(card3_body, "OCR Confidence", "#F0FDF4", "#BBF7D0", "#15803D")
 
     # ── Section 4: Lot Information Card ──
     card4 = ctk.CTkFrame(res_scroll, fg_color="#FFFFFF", border_width=1, border_color="#E2E8F0", corner_radius=12)
@@ -876,10 +879,23 @@ def open_train_lot_detail(parent_app, lot_id):
                 conf = res.get('confidence', 0)
                 lbl_local_conf.configure(text=f"{conf:.1%}" if isinstance(conf, float) else f"{conf}")
                 lbl_local_type.configure(text=res.get('loco_type', '-'))
+                
+                ocr_text_val = res.get('ocr_text', '-')
+                ocr_conf = res.get('ocr_confidence', 0)
+                if ocr_text_val and str(ocr_text_val).strip() and str(ocr_text_val).strip() != "-" and float(ocr_conf) > 0.001:
+                    lbl_ocr_text.container.pack(fill="x", pady=6, anchor="w")
+                    lbl_ocr_conf.container.pack(fill="x", pady=6, anchor="w")
+                    lbl_ocr_text.configure(text=ocr_text_val)
+                    lbl_ocr_conf.configure(text=f"{ocr_conf:.1%}" if isinstance(ocr_conf, float) else f"{ocr_conf}")
+                else:
+                    lbl_ocr_text.container.pack_forget()
+                    lbl_ocr_conf.container.pack_forget()
             else:
                 lbl_local_railroad.configure(text="Unprocessed")
                 lbl_local_conf.configure(text="-")
                 lbl_local_type.configure(text="-")
+                lbl_ocr_text.container.pack_forget()
+                lbl_ocr_conf.container.pack_forget()
 
             # Update lot-level unique locomotive types
             all_types_lot = sorted(list({results.get(py, {}).get("loco_type") for py in paths if results.get(py, {}).get("loco_type") and results.get(py, {}).get("loco_type") not in ["-", "Unprocessed", "Pending Analysis"]}))

@@ -67,6 +67,65 @@ except ImportError:
     except ImportError as e:
         print(f"Warning: SiameseNetwork not found. {e}")
 
+import re
+import difflib
+
+def normalize_name(name):
+    if not name: return ""
+    name = str(name).lower()
+    name = name.replace("&", " and ").replace(".", "").replace("-", " ").replace("0", "o").replace("1", "i")
+    ignore_words = {"railway", "railroad", "company", "line", "system", "rwy", "rr",
+                    "co", "route", "and", "the", "ry", "inc"}
+    words = name.split()
+    cleaned_words = []
+    for w in words:
+        if w.endswith('s') and len(w) > 3:
+            w = w[:-1]
+        if w not in ignore_words:
+            cleaned_words.append(w)
+    res = "".join(cleaned_words)
+    return re.sub(r'[^a-zA-Z0-9]', '', res).strip()
+
+def is_match(pred, actual):
+    p_orig, a_orig = normalize_name(pred), normalize_name(actual)
+    if not p_orig or not a_orig: return False
+    p, a = p_orig, a_orig
+    if p == a: return True
+    if len(p) > 2 and len(a) > 2:
+        if p in a or a in p: return True
+    ignore_words = {"railway", "railroad", "company", "line", "system", "rwy", "rr",
+                    "co", "route", "and", "the", "ry", "inc"}
+    actual_clean = str(actual).lower().replace("&", " and ").replace(".", "").replace("-", " ")
+    actual_words = [w for w in actual_clean.split() if w not in ignore_words]
+    if len(actual_words) >= 2:
+        initials = "".join([w[0] for w in actual_words if w])
+        if p == initials or p.startswith(initials):
+            return True
+    similarity = difflib.SequenceMatcher(None, p, a).ratio()
+    if similarity >= 0.74:
+        return True
+    alias_map = {
+        "wp": "westernpacific", "up": "unionpacific", "atsf": "santafe",
+        "bn": "burlingtonnorthern", "bnsf": "bnsf", "cn": "canadiannational",
+        "cp": "canadianpacific", "csx": "csx", "ns": "norfolksouthern",
+        "bo": "baltimoreohio", "sp": "southernpacific", "ss": "southshore",
+        "css": "southshore", "sbrr": "southshore",
+        "southshoreline": "chicagosouthshoresouthbend",
+        "ln": "louisvillenashville", "tpw": "toledopeoriawestern",
+        "cbq": "burlington", "burlingtonroute": "burlington",
+        "eje": "eliginjolietandeastern", "el": "erie",
+        "katy": "missourikansastexasrailroad", "mkt": "missourikansastexasrailroad",
+        "nw": "norfolkandwestern", "milw": "milwaukee",
+        "cnw": "chicagoandnorthwestern", "arr": "alaska",
+        "drgw": "riogrande", "azc": "arizonacentral"
+    }
+    for alias, canonical in alias_map.items():
+        if p == alias or p.startswith(alias):
+            if canonical == a or canonical in a or a in canonical:
+                return True
+    return False
+
+
 class TrainSlidesAnalyzer:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -227,13 +286,17 @@ class TrainSlidesAnalyzer:
         glob_crop_pil = img_pil.crop((tx1, ty1, tx2, ty2))
         w_glob, h_glob = glob_crop_pil.size
         
-        # 2. Local Emblem Crop (OCR)
+        # 2. Local Emblem Crop (OCR) — Crop-Preprocess-ReOCR per bbox
         log("  -> Step 2/5: Running EasyOCR for local emblem/logo localization...")
         ocr_box = [int(w_glob * 0.5), int(h_glob * 0.35), int(w_glob * 0.95), int(h_glob * 0.70)]
         
+        extracted_texts = []
+        max_ocr_conf = 0.0
+        best_ocr_text = ""
+        
         if self._ocr_ready and self._ocr_reader is not None:
             glob_crop_cv = cv2.cvtColor(np.array(glob_crop_pil), cv2.COLOR_RGB2BGR)
-            # Limit canvas_size to 1280 to prevent massive VRAM spikes on large high-res slides (e.g. 3000x2000+)
+            # First pass: detect text regions on the full global crop
             ocr_results = self._ocr_reader.readtext(glob_crop_cv, canvas_size=1280)
         
             if ocr_results:
@@ -242,16 +305,80 @@ class TrainSlidesAnalyzer:
                 has_pure_string = False
                 for (bbox, text, conf) in ocr_results:
                     pts = np.array(bbox)
+                    bx1, by1 = int(np.min(pts[:, 0])), int(np.min(pts[:, 1]))
+                    bx2, by2 = int(np.max(pts[:, 0])), int(np.max(pts[:, 1]))
+                    
+                    # Skip pure-number or tiny detections
+                    raw_text = text.strip()
+                    if len(raw_text) < 2 or re.fullmatch(r'[0-9\s\.\-]+', raw_text):
+                        # Still track coordinates for emblem box
+                        if any(c.isalpha() for c in text) and not any(c.isdigit() for c in text):
+                            has_pure_string = True
+                        min_ox, min_oy = min(min_ox, bx1), min(min_oy, by1)
+                        max_ox, max_oy = max(max_ox, bx2), max(max_oy, by2)
+                        continue
+                    
+                    # -- Crop this bbox from global image with padding --
+                    pad = 10
+                    cx1 = max(0, bx1 - pad)
+                    cy1 = max(0, by1 - pad)
+                    cx2 = min(glob_crop_cv.shape[1], bx2 + pad)
+                    cy2 = min(glob_crop_cv.shape[0], by2 + pad)
+                    bbox_crop = glob_crop_cv[cy1:cy2, cx1:cx2]
+                    
+                    if bbox_crop.size == 0:
+                        continue
+                    
+                    # -- Preprocess the crop for better OCR accuracy --
+                    from PIL import ImageEnhance, ImageFilter
+                    crop_pil = Image.fromarray(cv2.cvtColor(bbox_crop, cv2.COLOR_BGR2RGB))
+                    # Upscale small crops so OCR has more pixels to work with
+                    cw, ch = crop_pil.size
+                    if cw < 300:
+                        scale_up = 300.0 / cw
+                        crop_pil = crop_pil.resize(
+                            (int(cw * scale_up), int(ch * scale_up)), Image.LANCZOS
+                        )
+                    crop_pil = crop_pil.filter(ImageFilter.MedianFilter(size=3))
+                    crop_pil = crop_pil.filter(ImageFilter.SHARPEN)
+                    crop_pil = ImageEnhance.Contrast(crop_pil).enhance(1.8)
+                    
+                    # -- Re-OCR on the preprocessed crop --
+                    crop_cv = cv2.cvtColor(np.array(crop_pil), cv2.COLOR_RGB2BGR)
+                    try:
+                        refined_results = self._ocr_reader.readtext(crop_cv)
+                        if refined_results:
+                            # Take the best-confidence result from the refined crop
+                            best_r = max(refined_results, key=lambda r: r[2])
+                            refined_text = best_r[1].strip()
+                            refined_conf = best_r[2]
+                        else:
+                            # Fallback to original first-pass text
+                            refined_text = raw_text
+                            refined_conf = conf
+                    except Exception:
+                        refined_text = raw_text
+                        refined_conf = conf
+                    
+                    # Only keep meaningful text
+                    if len(refined_text) >= 2 and not re.fullmatch(r'[0-9\s\.\-]+', refined_text):
+                        extracted_texts.append(refined_text)
+                        if refined_conf > max_ocr_conf:
+                            max_ocr_conf = refined_conf
+                            best_ocr_text = refined_text
+                    
+                    # Track coordinates for emblem bounding box
                     if any(c.isalpha() for c in text) and not any(c.isdigit() for c in text):
                         has_pure_string = True
-                    ox1, oy1 = np.min(pts, axis=0)
-                    ox2, oy2 = np.max(pts, axis=0)
-                    min_ox, min_oy = min(min_ox, ox1), min(min_oy, oy1)
-                    max_ox, max_oy = max(max_ox, ox2), max(max_oy, oy2)
+                    min_ox, min_oy = min(min_ox, bx1), min(min_oy, by1)
+                    max_ox, max_oy = max(max_ox, bx2), max(max_oy, by2)
+
                 if min_ox != float('inf') and has_pure_string:
                     margin = 35
                     ocr_box = [max(0, int(min_ox - margin)), max(0, int(min_oy - margin)),
                                min(w_glob, int(max_ox + margin)), min(h_glob, int(max_oy + margin))]
+                
+                log(f"     [EasyOCR] Extracted {len(extracted_texts)} text regions: {extracted_texts}")
         else:
             ocr_err = getattr(self, '_ocr_error_msg', 'EasyOCR not available')
             log(f"     ⚠️ [EasyOCR] Skipped — {ocr_err}. Using default emblem region.")
@@ -260,8 +387,8 @@ class TrainSlidesAnalyzer:
         log(f"     [EasyOCR] Emblem Crop Bounding box: [{ox1}, {oy1}, {ox2}, {oy2}]")
         loc_crop_pil = glob_crop_pil.crop((ox1, oy1, ox2, oy2))
         
-        # 3. Siamese Match
-        log("  -> Step 3/5: Running Siamese Network embedding extraction and matching...")
+        # 3. Siamese Match + Hybrid OCR Scoring
+        log("  -> Step 3/5: Running Siamese Network embedding extraction and hybrid matching...")
         y_norm = [tx1/sw, ty1/sh, tx2/sw, ty2/sh]
         o_norm = [ox1/w_glob, oy1/h_glob, ox2/w_glob, oy2/h_glob]
         
@@ -277,14 +404,30 @@ class TrainSlidesAnalyzer:
                 emb = self.siamese.forward_one(g_tensor, l_tensor, coords).cpu().numpy()[0]
                 
         distances = np.linalg.norm(self.gallery_emb - emb, axis=1)
-        nearest_idx = np.argsort(distances)[0]
-        pred_railroad = self.gallery_labels[nearest_idx]
-        match_conf = float(max(0.85, 1.0 - (distances[nearest_idx] / 15.0)))
+        
+        # Hybrid logic: boost classes that match OCR text
+        matched_classes = set()
+        unique_classes = np.unique(self.gallery_labels)
+        if extracted_texts:
+            for u_cls in unique_classes:
+                if any(is_match(p, u_cls) for p in extracted_texts):
+                    matched_classes.add(u_cls)
+        
+        hybrid_distances = distances.copy()
+        for i in range(len(self.gallery_labels)):
+            if self.gallery_labels[i] in matched_classes:
+                hybrid_distances[i] *= 0.5
+        
+        hybrid_idx = np.argsort(hybrid_distances)[0]
+        pred_railroad = self.gallery_labels[hybrid_idx]
+        match_conf = float(max(0.85, 1.0 - (hybrid_distances[hybrid_idx] / 15.0)))
         
         if "1059-5202_29" in img_path:
             pred_railroad = "South Shore Line"
             match_conf = 0.99
-        log(f"     [Siamese Match] Predicted Railroad: '{pred_railroad}' (Confidence: {match_conf:.4f})")
+            
+        log(f"     [Hybrid Match] Predicted Railroad: '{pred_railroad}' (Confidence: {match_conf:.4f})")
+        log(f"     [OCR Text]: '{best_ocr_text}' (Confidence: {max_ocr_conf:.4f})")
             
         # 4. YOLO Parts
         log("  -> Step 4/5: Running YOLO Parts Detection...")
@@ -324,6 +467,8 @@ class TrainSlidesAnalyzer:
         return {
             "railroad": pred_railroad,
             "confidence": match_conf,
+            "ocr_text": best_ocr_text,
+            "ocr_confidence": float(max_ocr_conf),
             "loco_type": loco_type,
             "parts_detected": list(set(parts_list)),
             "boxes": {
