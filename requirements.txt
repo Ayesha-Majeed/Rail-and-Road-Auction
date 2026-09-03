@@ -1,5 +1,5 @@
+# SYSTEM DEPENDENCY (not pip): sudo apt install python3.10-tk -y
 customtkinter
-CTkMessagebox
 pymongo[srv]
 dnspython
 pillow
@@ -8,15 +8,16 @@ opencv-python-headless
 python-dotenv
 doclayout-yolo
 loguru
-torch==2.1.0
-torchvision==0.16.0
+torch>=2.2.0
+torchvision>=0.17.0
 ollama
 requests
 certifi
 easyocr==1.7.2
 ultralytics==8.3.40
 numpy<2
-thefuzz
 transformers
-pydantic
-tqdm
+paddlepaddle
+paddleocr
+thefuzz
+python-Levenshtein

@@ -1,0 +1,30 @@
+# Environments
+venv/
+venv310/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build / Distribution
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Logs
+syna_error.log
+*.log
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Full_Dataset_turn2/
