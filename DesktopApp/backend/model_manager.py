@@ -8,14 +8,11 @@ from pathlib import Path
 # Determined if running as a PyInstaller bundle
 def get_app_dir():
     if getattr(sys, 'frozen', False):
-        # If frozen, look in the directory of the executable
-        # AND check _MEIPASS for bundled files
-        exe_dir = os.path.dirname(sys.executable)
         if hasattr(sys, '_MEIPASS'):
-            # Bundle root (internal)
             return sys._MEIPASS
-        return exe_dir
-    return os.path.dirname(os.path.abspath(__file__))
+        return os.path.dirname(sys.executable)
+    # If not frozen, we are in DesktopApp/backend/model_manager.py, so go up one directory
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BASE_DIR = get_app_dir()
 MODELS_DIR = os.path.join(BASE_DIR, "models")

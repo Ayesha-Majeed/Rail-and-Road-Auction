@@ -135,17 +135,19 @@ def is_match(pred, actual):
 class TrainSlidesAnalyzer:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        models_dir = os.path.join(os.path.dirname(base_dir), "models")
-        exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else base_dir
+        if getattr(sys, 'frozen', False):
+            if hasattr(sys, '_MEIPASS'):
+                models_dir = os.path.join(sys._MEIPASS, "models")
+            else:
+                models_dir = os.path.join(os.path.dirname(sys.executable), "models")
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            models_dir = os.path.join(os.path.dirname(base_dir), "models")
         
         def get_path(filename):
             paths_to_check = [
                 os.path.join(models_dir, filename),
-                os.path.join(base_dir, "weights", filename),
-                os.path.join(base_dir, filename),
-                os.path.join(exe_dir, "weights", filename),
-                os.path.join(exe_dir, filename),
+                os.path.join(models_dir, "weights", filename),
             ]
             for p_check in paths_to_check:
                 if os.path.exists(p_check):
