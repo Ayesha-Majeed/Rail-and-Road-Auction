@@ -50,7 +50,6 @@ jobs:
         --add-data "DesktopApp/.env;." `
         --add-data "DesktopApp/backend;backend" `
         --add-data "DesktopApp/frontend;frontend" `
-        --add-data "models;models" `
         --collect-all magic-pdf `
         --collect-all easyocr `
         --collect-all doclayout-yolo `
