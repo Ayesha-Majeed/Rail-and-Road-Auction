@@ -5,12 +5,16 @@ import requests
 import traceback
 from pathlib import Path
 
-# Determined if running as a PyInstaller bundle
 def get_app_dir():
     if getattr(sys, 'frozen', False):
+        # Look for models folder next to EXE first (external models)
+        exe_dir = os.path.dirname(sys.executable)
+        if os.path.exists(os.path.join(exe_dir, "models")):
+            return exe_dir
+            
         if hasattr(sys, '_MEIPASS'):
             return sys._MEIPASS
-        return os.path.dirname(sys.executable)
+        return exe_dir
     # If not frozen, we are in DesktopApp/backend/model_manager.py, so go up one directory
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

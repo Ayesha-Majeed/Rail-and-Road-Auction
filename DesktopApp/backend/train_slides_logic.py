@@ -148,6 +148,7 @@ class TrainSlidesAnalyzer:
             paths_to_check = [
                 os.path.join(models_dir, filename),
                 os.path.join(models_dir, "weights", filename),
+                os.path.join(os.path.dirname(sys.executable), "models", filename) if getattr(sys, 'frozen', False) else "",
             ]
             for p_check in paths_to_check:
                 if os.path.exists(p_check):
