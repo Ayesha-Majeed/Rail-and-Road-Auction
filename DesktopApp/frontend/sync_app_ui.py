@@ -416,6 +416,15 @@ class ModernDropdown(ctk.CTkFrame):
             btn.pack(fill="x", pady=self.px(2), padx=self.px(6))
             self.buttons_cache[val] = btn
             
+    def update_values(self, values):
+        self.is_loading = False
+        self.all_values = values
+        if values:
+            self.current_value.set(values[0])
+        else:
+            self.current_value.set("No existing labels found")
+        self.populate(values)
+            
     def toggle(self):
         if self.is_open:
             self.dropdown_window.place_forget()
@@ -557,16 +566,20 @@ class AddNewClassWindow:
         try:
             import torch
             import os
-            pt_path = "/home/kk/Desktop/CV projects/Rail-and-Road-Auction-main/DesktopApp/models/val_embeddings.pt"
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            pt_path = os.path.join(base_dir, "..", "models", "val_embeddings.pt")
             if os.path.exists(pt_path):
                 data = torch.load(pt_path, map_location="cpu", weights_only=True)
                 labels = sorted(list(set(data["labels"])))
                 if hasattr(self, "combo_label") and self.top.winfo_exists():
-                    self.top.after(0, lambda: self.combo_label.configure(values=labels))
+                    self.top.after(0, lambda: self.combo_label.update_values(labels))
+            else:
+                if hasattr(self, "combo_label") and self.top.winfo_exists():
+                    self.top.after(0, lambda: self.combo_label.update_values(["No existing labels found"]))
         except Exception as e:
             print("Could not load embeddings labels:", e)
             if hasattr(self, "combo_label") and self.top.winfo_exists():
-                self.top.after(0, lambda: self.combo_label.configure(values=["No labels found"]))
+                self.top.after(0, lambda: self.combo_label.update_values(["No existing labels found"]))
 
     def _build_ui(self):
         px, fs = self.px, self.fs
@@ -712,6 +725,54 @@ class AddNewClassWindow:
         if val:
             self.combo_label.set("Creating new label...")
 
+    def _custom_askyesno(self, title, text, on_yes):
+        win = ctk.CTkToplevel(self.top)
+        win.title(title)
+        win.geometry("400x200")
+        win.attributes("-topmost", True)
+        win.grab_set()
+        
+        self.top.update_idletasks()
+        x = self.top.winfo_x() + (self.top.winfo_width() // 2) - 200
+        y = self.top.winfo_y() + (self.top.winfo_height() // 2) - 100
+        win.geometry(f"400x200+{max(0, x)}+{max(0, y)}")
+        win.after(100, lambda: win.attributes("-topmost", False))
+        
+        lbl = ctk.CTkLabel(win, text=text, font=ctk.CTkFont(family="Inter", size=14), wraplength=350)
+        lbl.pack(pady=(40, 20), padx=20)
+        
+        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=10)
+        
+        def yes_action():
+            win.destroy()
+            on_yes()
+            
+        btn_yes = ctk.CTkButton(btn_frame, text="Confirm", width=120, command=yes_action, fg_color="#27ae60", hover_color="#219653")
+        btn_yes.pack(side="left", padx=30, expand=True)
+        
+        btn_no = ctk.CTkButton(btn_frame, text="Cancel", width=120, command=win.destroy, fg_color="#e74c3c", hover_color="#c0392b")
+        btn_no.pack(side="right", padx=30, expand=True)
+
+    def _custom_showinfo(self, title, text):
+        win = ctk.CTkToplevel(self.top)
+        win.title(title)
+        win.geometry("400x200")
+        win.attributes("-topmost", True)
+        win.grab_set()
+        
+        self.top.update_idletasks()
+        x = self.top.winfo_x() + (self.top.winfo_width() // 2) - 200
+        y = self.top.winfo_y() + (self.top.winfo_height() // 2) - 100
+        win.geometry(f"400x200+{max(0, x)}+{max(0, y)}")
+        win.after(100, lambda: win.attributes("-topmost", False))
+        
+        lbl = ctk.CTkLabel(win, text=text, font=ctk.CTkFont(family="Inter", size=14), wraplength=350)
+        lbl.pack(pady=(50, 20), padx=20)
+        
+        btn = ctk.CTkButton(win, text="OK", width=120, command=win.destroy, fg_color="#2980b9", hover_color="#3498db")
+        btn.pack(pady=10)
+
     def _generate_embeddings_prompt(self):
         new_label = self.entry_new_label.get().strip()
         
@@ -732,12 +793,7 @@ class AddNewClassWindow:
             messagebox.showerror("Error", "Please select a label from the dropdown or enter a new label name.", parent=self.top)
             return
             
-        res = messagebox.askyesno(
-            "Confirm Embeddings", 
-            f"Are you sure all the images belong to the class '{label}'?\n\nPlease verify before proceeding.",
-            parent=self.top
-        )
-        if res:
+        def on_yes():
             if not self.image_paths:
                 messagebox.showwarning("No Images", "Please upload at least one image first.", parent=self.top)
                 return
@@ -750,6 +806,12 @@ class AddNewClassWindow:
                 self._extract_and_save_embeddings(label, crop_results)
                 
             InteractiveCropper(self.top, self.image_paths, C, self.px, self.fs, on_confirm)
+            
+        self._custom_askyesno(
+            "Confirm Embeddings", 
+            f"Are you sure all the images belong to the class '{label}'?\n\nPlease verify before proceeding.",
+            on_yes
+        )
             
     def _extract_and_save_embeddings(self, label, crop_results):
         self._show_loader()
@@ -854,18 +916,18 @@ class AddNewClassWindow:
                 if skipped > 0:
                     msg += f"\nSkipped {skipped} duplicates."
                     
-                self.top.after(0, lambda: messagebox.showinfo("Success", msg, parent=self.top))
+                self.top.after(0, lambda: self._custom_showinfo("Success", msg))
                 
                 # Update dropdown if it's a completely new label
                 if label not in self.known_labels:
                     self.known_labels.append(label)
                     self.known_labels.sort()
-                    vals = list(self.combo_label.cget("values"))
+                    vals = list(self.combo_label.all_values)
                     if vals == ["No existing labels found"]: vals = []
                     vals.append(label)
                     vals.sort()
-                    self.top.after(0, lambda: self.combo_label.configure(values=vals))
-                    self.top.after(0, lambda: self.combo_label.set(label))
+                    self.top.after(0, lambda: self.combo_label.update_values(vals))
+                    self.top.after(0, lambda: self.combo_label.current_value.set(label))
                     
                 self.top.after(0, lambda: self.entry_new_label.delete(0, "end"))
                     
