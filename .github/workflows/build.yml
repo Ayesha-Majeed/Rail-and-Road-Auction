@@ -63,6 +63,11 @@ jobs:
         --collect-all torchvision `
         --collect-all numpy `
         --collect-all transformers `
+        --collect-all timm `
+        --collect-all safetensors `
+        --collect-all tokenizers `
+        --collect-all huggingface_hub `
+        --collect-all regex `
         --hidden-import=numpy `
         --hidden-import=yaml `
         --hidden-import=easyocr.easyocr `
