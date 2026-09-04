@@ -2204,14 +2204,21 @@ class SyncApp(ctk.CTk):
                     self.after(0, lambda: self.configure(cursor="watch"))
                     
                     try:
-                        doc = self.db_connector.db[coll].find_one({"book_id": book_id}) if (self.db_connector and self.db_connector.connected) else None
-                        
-                        # Fallback to in-memory cached doc if it was skipped (duplicate)
-                        if not doc and book_id in self.last_sync_results:
+                        # 1. ALWAYS prioritize in-memory cached doc (skipped or freshly synced in this session)
+                        if book_id in self.last_sync_results:
                             cached = self.last_sync_results[book_id]
                             if isinstance(cached, dict) and "doc" in cached:
-                                doc = cached["doc"]
+                                self._log(f"⚡ [UI] Book {book_id} fetched directly from Temp List (Cache Hit!)")
+                                self.after(0, lambda: _create_window(cached["doc"]))
+                                return
                                 
+                        # 2. Fallback to Database: Fetch the NEWEST document for this book_id (sort by _id descending)
+                        self._log(f"🔍 [UI] Book {book_id} not in Temp List. Fetching from Database (Cache Miss)...")
+                        doc = self.db_connector.db[coll].find_one(
+                            {"book_id": book_id}, 
+                            sort=[("_id", -1)]
+                        ) if (self.db_connector and self.db_connector.connected) else None
+                        
                         self.after(0, lambda: _create_window(doc))
                     except Exception:
                         self.after(0, lambda: _create_window(None))
@@ -3895,253 +3902,266 @@ class SyncApp(ctk.CTk):
                 self.after(0, lambda: self.btn_stop.configure(state="disabled"))
                 return
 
-            # --- PHASE 1: Process all lots with PyTorch models ---
-            all_lot_results = {}
-            for lid, flist in lots.items():
+            # --- CHUNKING LOGIC ---
+            BATCH_SIZE = 10
+            lot_items = list(lots.items())
+            
+            for batch_start in range(0, len(lot_items), BATCH_SIZE):
                 if not self.sync_running:
                     break
-
-                self.after(0, lambda l=lid: self.update_activity_row(l, "Processing", "Train Lot", ts))
-                lot_results = {}
-                try:
-                    for idx, img_path in enumerate(flist):
-                        if not self.sync_running:
-                            break
-                        def _model_cb(msg, pct):
-                            if "Download" in msg or "Loading" in msg:
-                                short_msg = "Init Models..." if "Loading" in msg else "Downloading..."
-                                self.after(0, lambda l=lid, m=short_msg: self.update_activity_row(l, m, "Train Lot", ts))
-                                
-                                if "Download" in msg and not getattr(analyzer, "_popup_shown", False):
-                                    analyzer._popup_shown = True
-                                    def _show_popup():
-                                        if getattr(analyzer, "_should_close_popup", False):
-                                            return
-                                        w, h = 400, 200
-                                        win = ctk.CTkToplevel(self)
-                                        win.title("Downloading Models")
-                                        win.geometry(f"{self._px(w)}x{self._px(h)}")
-                                        win.attributes("-topmost", True)
-                                        win.grab_set()
-                                        
-                                        self.update_idletasks()
-                                        px, py = self.winfo_x(), self.winfo_y()
-                                        pw, ph = self.winfo_width(), self.winfo_height()
-                                        win.geometry(f"+{px + (pw - self._px(w))//2}+{py + (ph - self._px(h))//2}")
-                                        
-                                        lbl = ctk.CTkLabel(win, text="Loading EasyOCR...", 
-                                                        font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
-                                                        text_color=C["text"])
-                                        lbl.pack(pady=(self._px(40), self._px(20)))
-                                        
-                                        prog = ctk.CTkProgressBar(win, width=self._px(360), height=self._px(12),
-                                                                progress_color=C["olive"], fg_color=C["border"])
-                                        prog.pack(pady=self._px(10))
-                                        prog.configure(mode="indeterminate")
-                                        prog.start()
-                                        
-                                        status = ctk.CTkLabel(win, text="Please wait. This is a one-time download...", 
-                                                            font=ctk.CTkFont(family="Inter", size=self.F["label"]),
-                                                            text_color=C["muted"])
-                                        status.pack(pady=self._px(5))
-                                        analyzer._popup_win = win
-                                    self.after(0, _show_popup)
-                                    
-                            elif "success" in msg.lower():
-                                analyzer._should_close_popup = True
-                                if getattr(analyzer, "_popup_win", None):
-                                    self.after(0, lambda: analyzer._popup_win.destroy() if analyzer._popup_win.winfo_exists() else None)
-                                    analyzer._popup_win = None
-                        
-                        res = analyzer.analyze_image(img_path, log_fn=self._log, progress_callback=_model_cb)
-                        lot_results[img_path] = res
-                        prog = f"Proc ({idx+1}/{len(flist)})"
-                        self.after(0, lambda l=lid, p=prog: self.update_activity_row(l, p, "Train Lot", ts))
-                        
+                
+                batch_lots = dict(lot_items[batch_start:batch_start + BATCH_SIZE])
+                batch_num = (batch_start // BATCH_SIZE) + 1
+                total_batches = (len(lot_items) + BATCH_SIZE - 1) // BATCH_SIZE
+                self._log(f"📦 Starting Batch {batch_num}/{total_batches} ({len(batch_lots)} lots)...")
+                
+                # --- PHASE 1: Process batch with PyTorch models ---
+                all_lot_results = {}
+                for lid, flist in batch_lots.items():
                     if not self.sync_running:
-                        self.after(0, lambda l=lid: self.update_activity_row(l, "Stopped", "Train Lot", ts))
-                    
-                    all_lot_results[lid] = lot_results
-                except Exception as ex:
-                    err_str = str(ex)
-                    self.after(0, lambda l=lid, err=err_str: self.update_activity_row(l, "Failed", "Train Lot", ts, error_msg=err))
+                        break
 
-            # --- PHASE 2: GPU Cleanup ---
-            # Unload PyTorch models ONCE after all lots are processed
-            if self.sync_running:
-                try:
-                    analyzer.unload_models(log_fn=self._log)
-                except Exception as e_unload:
-                    self._log(f"  ⚠️ GPU flush warning: {e_unload}")
-
-            # --- PHASE 3: Run Ollama Summarization for all lots ---
-            for lid, flist in lots.items():
-                if not self.sync_running:
-                    break
-                    
-                if lid not in all_lot_results:
-                    continue
-                    
-                lot_results = all_lot_results[lid]
-                self.after(0, lambda l=lid: self.update_activity_row(l, "AI Summary...", "Train Lot", ts))
-                
-                # 1. Compile lot statistics first to build fallback description
-                railroad_counts = {}
-                railroad_type_breakdown = {}
-
-                for p_img in flist:
-                    r_res = lot_results.get(p_img, {})
-                    if not r_res:
-                        continue
-                    rr = r_res.get("railroad")
-                    lt = r_res.get("loco_type")
-                    
-                    if not rr or rr in ["-", "Unprocessed", "Pending Analysis"]:
-                        continue
-                    if not lt or lt in ["-", "Unprocessed", "Pending Analysis"]:
-                        continue
-                        
-                    railroad_counts[rr] = railroad_counts.get(rr, 0) + 1
-                    if rr not in railroad_type_breakdown:
-                        railroad_type_breakdown[rr] = {}
-                    railroad_type_breakdown[rr][lt] = railroad_type_breakdown[rr].get(lt, 0) + 1
-
-                ai_desc = "This lot contains detailed train slide analysis. Engine classifications and railroad identities are extracted using deep neural network pipelines."
-                
-                if railroad_counts:
-                    self._log(f"   -> Analyzing statistics for {len(railroad_counts)} railroads (Lot: {lid})...")
-                    total_slides = len(flist)
-                    railroads_list = sorted(list(railroad_counts.keys()))
-                    railroads_str = ", ".join(railroads_list)
-                    suffix = "Railroad" if len(railroads_list) == 1 else "Railroads"
-                    
-                    desc_prefix = ""
-                    
-                    # Build a detailed, formatted string of only the detected data
-                    breakdown_items = []
-                    for rr, types in railroad_type_breakdown.items():
-                        lt_names = []
-                        for lt in types.keys():
-                            name = lt.lower().replace("locomotive", "").strip()
-                            if not name: name = "locomotive"
-                            if not name.endswith('s'): name += "s"
-                            lt_names.append(name)
-                        
-                        if len(lt_names) > 1:
-                            types_str = ", ".join(lt_names[:-1]) + " and " + lt_names[-1]
-                        else:
-                            types_str = lt_names[0] if lt_names else "locomotives"
-                        
-                        breakdown_items.append(f"{rr} {types_str}")
-                    
-                    if len(breakdown_items) > 2:
-                        breakdown_str = ", ".join(breakdown_items[:-1]) + ", and " + breakdown_items[-1]
-                    elif len(breakdown_items) == 2:
-                        breakdown_str = f"{breakdown_items[0]} and {breakdown_items[1]}"
-                    elif breakdown_items:
-                        breakdown_str = breakdown_items[0]
-                    else:
-                        breakdown_str = f"{total_slides} locomotive slides"
-
-                    # Generate deterministic fallback
-                    fallback_note = f"This lot contains slides of {breakdown_str}."
-                    ai_desc = desc_prefix + fallback_note
-
-                    # 2. Synchronously generate dynamic AI Lot description
+                    self.after(0, lambda l=lid: self.update_activity_row(l, "Processing", "Train Lot", ts))
+                    lot_results = {}
                     try:
-                        import time
-                        start_time = time.time()
+                        for idx, img_path in enumerate(flist):
+                            if not self.sync_running:
+                                break
+                            def _model_cb(msg, pct):
+                                if "Download" in msg or "Loading" in msg:
+                                    short_msg = "Init Models..." if "Loading" in msg else "Downloading..."
+                                    self.after(0, lambda l=lid, m=short_msg: self.update_activity_row(l, m, "Train Lot", ts))
+                                
+                                    if "Download" in msg and not getattr(analyzer, "_popup_shown", False):
+                                        analyzer._popup_shown = True
+                                        def _show_popup():
+                                            if getattr(analyzer, "_should_close_popup", False):
+                                                return
+                                            w, h = 400, 200
+                                            win = ctk.CTkToplevel(self)
+                                            win.title("Downloading Models")
+                                            win.geometry(f"{self._px(w)}x{self._px(h)}")
+                                            win.attributes("-topmost", True)
+                                            win.grab_set()
+                                        
+                                            self.update_idletasks()
+                                            px, py = self.winfo_x(), self.winfo_y()
+                                            pw, ph = self.winfo_width(), self.winfo_height()
+                                            win.geometry(f"+{px + (pw - self._px(w))//2}+{py + (ph - self._px(h))//2}")
+                                        
+                                            lbl = ctk.CTkLabel(win, text="Loading EasyOCR...", 
+                                                            font=ctk.CTkFont(family="Inter", size=self.F["heading"], weight="bold"),
+                                                            text_color=C["text"])
+                                            lbl.pack(pady=(self._px(40), self._px(20)))
+                                        
+                                            prog = ctk.CTkProgressBar(win, width=self._px(360), height=self._px(12),
+                                                                    progress_color=C["olive"], fg_color=C["border"])
+                                            prog.pack(pady=self._px(10))
+                                            prog.configure(mode="indeterminate")
+                                            prog.start()
+                                        
+                                            status = ctk.CTkLabel(win, text="Please wait. This is a one-time download...", 
+                                                                font=ctk.CTkFont(family="Inter", size=self.F["label"]),
+                                                                text_color=C["muted"])
+                                            status.pack(pady=self._px(5))
+                                            analyzer._popup_win = win
+                                        self.after(0, _show_popup)
+                                    
+                                elif "success" in msg.lower():
+                                    analyzer._should_close_popup = True
+                                    if getattr(analyzer, "_popup_win", None):
+                                        self.after(0, lambda: analyzer._popup_win.destroy() if analyzer._popup_win.winfo_exists() else None)
+                                        analyzer._popup_win = None
                         
-                        # Force using the 8B model as requested
-                        active_model = "llama3:latest"
+                            res = analyzer.analyze_image(img_path, log_fn=self._log, progress_callback=_model_cb)
+                            lot_results[img_path] = res
+                            prog = f"Proc ({idx+1}/{len(flist)})"
+                            self.after(0, lambda l=lid, p=prog: self.update_activity_row(l, p, "Train Lot", ts))
                         
-                        self._log(f"🤖 [Ollama] Querying model '{active_model}' for dynamic lot description (Lot: {lid})...")
-
-                        prompt = (
-                            f"You are an expert railway archival cataloguer.\n"
-                            f"Please write a single, natural, and professional sentence summarizing the contents of this train lot based ONLY on the data below.\n\n"
-                            f"Extracted Data: {breakdown_str}\n\n"
-                            "CRITICAL INSTRUCTIONS:\n"
-                            "1. Write a fluent, conversational sentence.\n"
-                            "2. DO NOT use any numbers or slide counts.\n"
-                            "3. DO NOT invent or add any locomotive builders (e.g. EMD, Alco), models, or locations.\n"
-                            "4. DO NOT guess, assume, or classify any train/car as 'passenger' or 'freight' unless that word is explicitly present in the Extracted Data.\n"
-                            "5. Output ONLY the final sentence. No introductory filler, no quotes, no extra text.\n\n"
-                            "Example: This lot features slides of BNSF and Santa Fe diesel locomotives, along with Union Pacific steam engines."
-                        )
-
-                        # pyrefly: ignore [missing-import]
-                        import ollama
-                        response = ollama.chat(
-                            model=active_model,
-                            messages=[{
-                                "role": "user",
-                                "content": prompt
-                            }]
-                        )
-                        possible_note = response.get("message", {}).get("content", "").strip()
-                        if possible_note.startswith("'") and possible_note.endswith("'"):
-                            possible_note = possible_note[1:-1]
-                        elif possible_note.startswith('"') and possible_note.endswith('"'):
-                            possible_note = possible_note[1:-1]
-                            
-                        # Strip conversational filler from LLM
-                        filler_prefixes = ["here is", "sure", "output:", "description:", "the final sentence is", "this lot features", "locomotive notes:", "note:", "this lot contains"]
-                        lower_note = possible_note.lower()
-                        for _ in range(3):
-                            for prefix in filler_prefixes:
-                                if lower_note.startswith(prefix):
-                                    possible_note = possible_note[len(prefix):].strip(" :\n\"'")
-                                    lower_note = possible_note.lower()
-                        if possible_note:
-                            possible_note = possible_note[0].upper() + possible_note[1:]
-                        else:
-                            possible_note = fallback_note
-                            
-                        possible_desc = desc_prefix + possible_note
-                        
-                        # Clean up common meta-garbage patterns from bad LLMs
-                        bad_patterns = ["archival lot description", "this description", "provides an overview", "focuses on", "the language used", "states that", "without unnecessary", "in the provided stats", "the provided statistics"]
-                        is_garbage = any(pat in possible_desc.lower() for pat in bad_patterns)
-                        
-                        if is_garbage or len(possible_note.strip()) < 8:
-                            possible_desc = desc_prefix + fallback_note
-                            
-                        if possible_desc:
-                            ai_desc = possible_desc
-                            duration = time.time() - start_time
-                            self._log(f"✅ [Ollama] Finished in {duration:.2f}s using '{active_model}'!")
-                            self._log(f"   -> Summary: \"{ai_desc}\"")
-                    except Exception as e_desc:
-                        self._log(f"⚠️ [Ollama] Generation failed: {e_desc}")
-                        self._log(f"   -> Caching default fallback lot description instead.")
+                        if not self.sync_running:
+                            self.after(0, lambda l=lid: self.update_activity_row(l, "Stopped", "Train Lot", ts))
                     
-                # Save Train Slides Lot to Database
-                slides_coll = "Train Slides Data"
-                lot_doc = {
-                    "lot_id": lid,
-                    "title": f"Train Slide Lot {lid}",
-                    "description": ai_desc,
-                    "synced_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "user_id": self.current_user.get("id") if getattr(self, "current_user", None) else None,
-                    "slides_data": lot_results
-                }
-                
-                if getattr(self, "db_connector", None) and getattr(self.db_connector, "connected", False):
-                    try:
-                        self.db_connector.insert_book(slides_coll, lot_doc)
-                        self._log(f"  ✅ DB Insert: Lot {lid} saved to '{slides_coll}'")
-                    except Exception as db_err:
-                        self._log(f"  ⚠️ DB Insert Failed for Lot {lid}: {db_err}")
+                        all_lot_results[lid] = lot_results
+                    except Exception as ex:
+                        err_str = str(ex)
+                        self.after(0, lambda l=lid, err=err_str: self.update_activity_row(l, "Failed", "Train Lot", ts, error_msg=err))
 
-                # Cache the full complete lot structure under last_sync_results only now!
-                self.last_sync_results[lid] = {
-                    "files": flist,
-                    "results": lot_results,
-                    "ai_description": ai_desc,
-                    "doc": lot_doc
-                }
-                self.after(0, lambda l=lid: self.update_activity_row(l, "Complete", "Train Lot", ts))
+                # --- PHASE 2: GPU Cleanup ---
+                # Unload PyTorch models ONCE after all lots are processed
+                if self.sync_running:
+                    try:
+                        analyzer.unload_models(log_fn=self._log)
+                    except Exception as e_unload:
+                        self._log(f"  ⚠️ GPU flush warning: {e_unload}")
+
+                # --- PHASE 3: Run Ollama Summarization for batch ---
+                for lid, flist in batch_lots.items():
+                    if not self.sync_running:
+                        break
+                    
+                    if lid not in all_lot_results:
+                        continue
+                    
+                    lot_results = all_lot_results[lid]
+                    self.after(0, lambda l=lid: self.update_activity_row(l, "AI Summary...", "Train Lot", ts))
+                
+                    # 1. Compile lot statistics first to build fallback description
+                    railroad_counts = {}
+                    railroad_type_breakdown = {}
+
+                    for p_img in flist:
+                        r_res = lot_results.get(p_img, {})
+                        if not r_res:
+                            continue
+                        rr = r_res.get("railroad")
+                        lt = r_res.get("loco_type")
+                    
+                        if not rr or rr in ["-", "Unprocessed", "Pending Analysis"]:
+                            continue
+                        if not lt or lt in ["-", "Unprocessed", "Pending Analysis"]:
+                            continue
+                        
+                        railroad_counts[rr] = railroad_counts.get(rr, 0) + 1
+                        if rr not in railroad_type_breakdown:
+                            railroad_type_breakdown[rr] = {}
+                        railroad_type_breakdown[rr][lt] = railroad_type_breakdown[rr].get(lt, 0) + 1
+
+                    ai_desc = "This lot contains detailed train slide analysis. Engine classifications and railroad identities are extracted using deep neural network pipelines."
+                
+                    if railroad_counts:
+                        self._log(f"   -> Analyzing statistics for {len(railroad_counts)} railroads (Lot: {lid})...")
+                        total_slides = len(flist)
+                        railroads_list = sorted(list(railroad_counts.keys()))
+                        railroads_str = ", ".join(railroads_list)
+                        suffix = "Railroad" if len(railroads_list) == 1 else "Railroads"
+                    
+                        desc_prefix = ""
+                    
+                        # Build a detailed, formatted string of only the detected data
+                        breakdown_items = []
+                        for rr, types in railroad_type_breakdown.items():
+                            lt_names = []
+                            for lt in types.keys():
+                                name = lt.lower().replace("locomotive", "").strip()
+                                if not name: name = "locomotive"
+                                if not name.endswith('s'): name += "s"
+                                lt_names.append(name)
+                        
+                            if len(lt_names) > 1:
+                                types_str = ", ".join(lt_names[:-1]) + " and " + lt_names[-1]
+                            else:
+                                types_str = lt_names[0] if lt_names else "locomotives"
+                        
+                            breakdown_items.append(f"{rr} {types_str}")
+                    
+                        if len(breakdown_items) > 2:
+                            breakdown_str = ", ".join(breakdown_items[:-1]) + ", and " + breakdown_items[-1]
+                        elif len(breakdown_items) == 2:
+                            breakdown_str = f"{breakdown_items[0]} and {breakdown_items[1]}"
+                        elif breakdown_items:
+                            breakdown_str = breakdown_items[0]
+                        else:
+                            breakdown_str = f"{total_slides} locomotive slides"
+
+                        # Generate deterministic fallback
+                        fallback_note = f"This lot contains slides of {breakdown_str}."
+                        ai_desc = desc_prefix + fallback_note
+
+                        # 2. Synchronously generate dynamic AI Lot description
+                        try:
+                            import time
+                            start_time = time.time()
+                        
+                            # Force using the 8B model as requested
+                            active_model = "llama3:latest"
+                        
+                            self._log(f"🤖 [Ollama] Querying model '{active_model}' for dynamic lot description (Lot: {lid})...")
+
+                            prompt = (
+                                f"You are an expert railway archival cataloguer.\n"
+                                f"Please write a single, natural, and professional sentence summarizing the contents of this train lot based ONLY on the data below.\n\n"
+                                f"Extracted Data: {breakdown_str}\n\n"
+                                "CRITICAL INSTRUCTIONS:\n"
+                                "1. Write a fluent, conversational sentence.\n"
+                                "2. DO NOT use any numbers or slide counts.\n"
+                                "3. DO NOT invent or add any locomotive builders (e.g. EMD, Alco), models, or locations.\n"
+                                "4. DO NOT guess, assume, or classify any train/car as 'passenger' or 'freight' unless that word is explicitly present in the Extracted Data.\n"
+                                "5. Output ONLY the final sentence. No introductory filler, no quotes, no extra text.\n\n"
+                                "Example: This lot features slides of BNSF and Santa Fe diesel locomotives, along with Union Pacific steam engines."
+                            )
+
+                            # pyrefly: ignore [missing-import]
+                            import ollama
+                            response = ollama.chat(
+                                model=active_model,
+                                messages=[{
+                                    "role": "user",
+                                    "content": prompt
+                                }]
+                            )
+                            possible_note = response.get("message", {}).get("content", "").strip()
+                            if possible_note.startswith("'") and possible_note.endswith("'"):
+                                possible_note = possible_note[1:-1]
+                            elif possible_note.startswith('"') and possible_note.endswith('"'):
+                                possible_note = possible_note[1:-1]
+                            
+                            # Strip conversational filler from LLM
+                            filler_prefixes = ["here is", "sure", "output:", "description:", "the final sentence is", "this lot features", "locomotive notes:", "note:", "this lot contains"]
+                            lower_note = possible_note.lower()
+                            for _ in range(3):
+                                for prefix in filler_prefixes:
+                                    if lower_note.startswith(prefix):
+                                        possible_note = possible_note[len(prefix):].strip(" :\n\"'")
+                                        lower_note = possible_note.lower()
+                            if possible_note:
+                                possible_note = possible_note[0].upper() + possible_note[1:]
+                            else:
+                                possible_note = fallback_note
+                            
+                            possible_desc = desc_prefix + possible_note
+                        
+                            # Clean up common meta-garbage patterns from bad LLMs
+                            bad_patterns = ["archival lot description", "this description", "provides an overview", "focuses on", "the language used", "states that", "without unnecessary", "in the provided stats", "the provided statistics"]
+                            is_garbage = any(pat in possible_desc.lower() for pat in bad_patterns)
+                        
+                            if is_garbage or len(possible_note.strip()) < 8:
+                                possible_desc = desc_prefix + fallback_note
+                            
+                            if possible_desc:
+                                ai_desc = possible_desc
+                                duration = time.time() - start_time
+                                self._log(f"✅ [Ollama] Finished in {duration:.2f}s using '{active_model}'!")
+                                self._log(f"   -> Summary: \"{ai_desc}\"")
+                        except Exception as e_desc:
+                            self._log(f"⚠️ [Ollama] Generation failed: {e_desc}")
+                            self._log(f"   -> Caching default fallback lot description instead.")
+                    
+                    # Save Train Slides Lot to Database
+                    slides_coll = "Train Slides Data"
+                    lot_doc = {
+                        "lot_id": lid,
+                        "title": f"Train Slide Lot {lid}",
+                        "description": ai_desc,
+                        "synced_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "user_id": self.current_user.get("id") if getattr(self, "current_user", None) else None,
+                        "slides_data": lot_results
+                    }
+                
+                    if getattr(self, "db_connector", None) and getattr(self.db_connector, "connected", False):
+                        try:
+                            self.db_connector.insert_book(slides_coll, lot_doc)
+                            self._log(f"  ✅ DB Insert: Lot {lid} saved to '{slides_coll}'")
+                        except Exception as db_err:
+                            self._log(f"  ⚠️ DB Insert Failed for Lot {lid}: {db_err}")
+
+                    # Cache the full complete lot structure under last_sync_results only now!
+                    self.last_sync_results[lid] = {
+                        "files": flist,
+                        "results": lot_results,
+                        "ai_description": ai_desc,
+                        "doc": lot_doc
+                    }
+                    self.after(0, lambda l=lid: self.update_activity_row(l, "Complete", "Train Lot", ts))
                 
             # --- PHASE 4: Unload Ollama from RAM after ALL lots ---
             if self.sync_running:
@@ -4255,8 +4275,9 @@ class SyncApp(ctk.CTk):
             try:
                 self.db_connector.insert_book(coll, doc)
                 self._log(f"  ✅ Synced: {book_id}")
-                # Save to last_sync_results so it can be opened on click
-                self.last_sync_results[book_id] = book_pages
+                # Save full doc to last_sync_results so it can be opened instantly on click
+                self.last_sync_results[book_id] = {"files": book_pages, "doc": doc}
+                self._log(f"  📝 Saved to Temp List. Total cached items: {len(self.last_sync_results)}")
                 self.after(0, lambda: self.update_activity_row(book_id, "Complete", "Book", ts))
             except Exception as e:
                 self._log(f"  ❌ DB Error: {e}")
@@ -4858,6 +4879,7 @@ class SyncApp(ctk.CTk):
                                             if matched_doc:
                                                 self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping.")
                                                 self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc}
+                                                self._log(f"  📝 Skipped book saved to Temp List. Total cached items: {len(self.last_sync_results)}")
                                                 self.total_skip += 1
                                                 synced.add(book_id)
                                                 self.after(0, lambda b=book_id, t=ts:
@@ -4899,6 +4921,9 @@ class SyncApp(ctk.CTk):
                                 self.total_ok += 1
                                 synced.add(book_id)
                                 self._log(f"  ✅ Synced: {book_id}")
+                                # Save full doc to last_sync_results
+                                self.last_sync_results[book_id] = {"files": books[book_id], "doc": doc}
+                                self._log(f"  📝 Synced book saved to Temp List. Total cached items: {len(self.last_sync_results)}")
                                 
                                 # --- Final Results Cleanup (Delete local mineru_results after success) ---
                                 try:
