@@ -566,8 +566,15 @@ class AddNewClassWindow:
         try:
             import torch
             import os
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            pt_path = os.path.join(base_dir, "..", "models", "val_embeddings.pt")
+            import sys
+            
+            if getattr(sys, 'frozen', False):
+                models_dir = os.path.join(os.path.dirname(sys.executable), "models")
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                models_dir = os.path.join(base_dir, "..", "models")
+                
+            pt_path = os.path.join(models_dir, "val_embeddings.pt")
             if os.path.exists(pt_path):
                 data = torch.load(pt_path, map_location="cpu", weights_only=True)
                 labels = sorted(list(set(data["labels"])))
@@ -819,12 +826,18 @@ class AddNewClassWindow:
         def task():
             import torch
             import os
+            import sys
             from PIL import Image
             import torch.nn.functional as F
             from models.train_phase5 import DINOv2DualStream, clean_transform
             
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            models_dir = os.path.join(base_dir, "..", "models")
+            if getattr(sys, 'frozen', False):
+                models_dir = os.path.join(os.path.dirname(sys.executable), "models")
+            else:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                models_dir = os.path.join(base_dir, "..", "models")
+                
+            os.makedirs(models_dir, exist_ok=True)
             
             try:
                 # 1. Load Model
@@ -3894,13 +3907,13 @@ class SyncApp(ctk.CTk):
             image_files = list(files)
             
             # Smart Auto-Pickup: For EVERY selected slide, look for siblings in same folder with same Lot ID
-            new_selected = set(image_files)
+            new_selected = set(os.path.normpath(f) for f in image_files)
             for f_path in image_files:
                 folder = os.path.dirname(f_path)
                 prefix = get_lot_id_from_filename(f_path)
                 
                 # Find all siblings matching this Lot ID
-                siblings = [os.path.join(folder, f) for f in os.listdir(folder)
+                siblings = [os.path.normpath(os.path.join(folder, f)) for f in os.listdir(folder)
                             if get_lot_id_from_filename(os.path.join(folder, f)) == prefix
                             and os.path.splitext(f)[1].lower() in supported]
                 
