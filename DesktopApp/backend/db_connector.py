@@ -46,7 +46,55 @@ class DBConnector:
         except:
             return False
 
-    def book_title_exists(self, collection, new_title, return_doc=False):
+    def update_book_sync_date(self, collection, doc_id_or_doc):
+        """
+        Updates the sync_date / synced_at timestamp of an existing book document in MongoDB.
+        """
+        if not doc_id_or_doc or self.db is None:
+            return False
+        
+        try:
+            from datetime import datetime
+            now_iso = datetime.now().isoformat()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            query = {}
+            if isinstance(doc_id_or_doc, dict):
+                if "_id" in doc_id_or_doc:
+                    query = {"_id": doc_id_or_doc["_id"]}
+                elif "book_id" in doc_id_or_doc:
+                    query = {"book_id": doc_id_or_doc["book_id"]}
+                elif "title" in doc_id_or_doc:
+                    query = {"title": doc_id_or_doc["title"]}
+            else:
+                query = {"_id": doc_id_or_doc}
+
+            if not query:
+                return False
+                
+            update_payload = {
+                "$set": {
+                    "synced_at": now_iso,
+                    "sync_date": now_iso,
+                    "last_synced": now_str,
+                    "updated_at": now_iso
+                }
+            }
+            
+            res = self.db[collection].update_one(query, update_payload)
+            if isinstance(doc_id_or_doc, dict):
+                doc_id_or_doc["synced_at"] = now_iso
+                doc_id_or_doc["sync_date"] = now_iso
+                doc_id_or_doc["last_synced"] = now_str
+                doc_id_or_doc["updated_at"] = now_iso
+
+            print(f"   🔄 Updated sync date in DB for matched book: {now_str}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to update book sync date: {e}")
+            return False
+
+    def book_title_exists(self, collection, new_title, return_doc=False, update_sync_date=False):
         if not new_title: return None if return_doc else False
         if isinstance(new_title, list): new_title = " ".join(new_title)
         new_title = str(new_title)
@@ -54,7 +102,7 @@ class DBConnector:
         try:
             # Fetch all titles from the database to compare
             # Fetch full document if return_doc is True so we can use it
-            projection = None if return_doc else {"title": 1}
+            projection = None if (return_doc or update_sync_date) else {"title": 1}
             books = self.db[collection].find({}, projection)
             from thefuzz import fuzz
             new_title_lower = new_title.lower()
@@ -69,6 +117,8 @@ class DBConnector:
                 if similarity >= 90:
                     print(f"   ↳ DB Title: '{t}' | Score: {similarity}%")
                     print(f"   ✅ Match found! (Score: {similarity}%) Skipping duplicate.")
+                    if update_sync_date:
+                        self.update_book_sync_date(collection, b)
                     return b if return_doc else True
             print("   ❌ No match found >= 90%. Book is unique.")
             return None if return_doc else False
