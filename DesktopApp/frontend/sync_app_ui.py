@@ -564,6 +564,7 @@ class AddNewClassWindow:
 
     def _load_labels_bg(self):
         try:
+            # pyrefly: ignore [missing-import]
             import torch
             import os
             import sys
@@ -1231,7 +1232,10 @@ class SyncApp(ctk.CTk):
 
         # Connect ocr_pipeline logs to our UI activity log
         try:
-            import main_mineru_ocr as ocr_pipeline
+            try:
+                import backend.main_mineru_ocr as ocr_pipeline
+            except ImportError:
+                import main_mineru_ocr as ocr_pipeline
             ocr_pipeline.LOG_CALLBACK = self._log
         except Exception as e:
             self._log(f"⚠️ Could not hook OCR logs: {e}")
@@ -4315,9 +4319,9 @@ class SyncApp(ctk.CTk):
                     # 3. DB Check (Title matching) AFTER OCR
                     try:
                         if extracted_title:
-                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True)
+                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True)
                             if matched_doc:
-                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping.")
+                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Sync date updated in DB & skipping.")
                                 # Save the matched DB document to memory so the preview page can display it!
                                 self.last_sync_results[book_id] = {"files": book_pages, "doc": matched_doc}
                                 self.after(0, lambda: self.update_activity_row(book_id, "Skipped", "Book", ts))
@@ -4656,9 +4660,9 @@ class SyncApp(ctk.CTk):
         if title_str:
             try:
                 if self.db_connector:
-                    matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True)
+                    matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True)
                     if matched_doc:
-                        self._log(f"  ⏭️  API Title '{title_str}' matches an existing book (90%+). Skipping heavy OCR.")
+                        self._log(f"  ⏭️  API Title '{title_str}' matches an existing book (90%+). Sync date updated in DB & skipping heavy OCR.")
                         return {"duplicate": True, "doc": matched_doc}
             except Exception as e:
                 self._log(f"  ⚠️ DB title check error (API Title): {e}")
@@ -4755,9 +4759,9 @@ class SyncApp(ctk.CTk):
                     try:
                         coll = self.config.get("collection", "Book Data")
                         if self.db_connector:
-                            matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True)
+                            matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True)
                             if matched_doc:
-                                self._log(f"  ⏭️  Extracted Title '{title_str}' matches an existing book (90%+). Skipping heavy AI.")
+                                self._log(f"  ⏭️  Extracted Title '{title_str}' matches an existing book (90%+). Sync date updated in DB & skipping heavy AI.")
                                 return {"duplicate": True, "doc": matched_doc}
                     except Exception as e:
                         self._log(f"  ⚠️ DB title check error (Extracted Title): {e}")
@@ -4950,9 +4954,9 @@ class SyncApp(ctk.CTk):
                                     # Check DB based on extracted title
                                     try:
                                         if extracted_title and self.db_connector:
-                                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True)
+                                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True)
                                             if matched_doc:
-                                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping.")
+                                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Sync date updated in DB & skipping.")
                                                 self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc}
                                                 self._log(f"  📝 Skipped book saved to Temp List. Total cached items: {len(self.last_sync_results)}")
                                                 self.total_skip += 1
