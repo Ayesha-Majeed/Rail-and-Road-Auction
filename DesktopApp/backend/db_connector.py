@@ -94,19 +94,27 @@ class DBConnector:
             print(f"❌ Failed to update book sync date: {e}")
             return False
 
-    def book_title_exists(self, collection, new_title, return_doc=False, update_sync_date=False):
+    def book_title_exists(self, collection, new_title, return_doc=False, update_sync_date=False, user_id=None):
         if not new_title: return None if return_doc else False
         if isinstance(new_title, list): new_title = " ".join(new_title)
         new_title = str(new_title)
         
         try:
-            # Fetch all titles from the database to compare
-            # Fetch full document if return_doc is True so we can use it
-            projection = None if (return_doc or update_sync_date) else {"title": 1}
-            books = self.db[collection].find({}, projection)
+            # Build filter query based on user_id if provided
+            query = {}
+            if user_id:
+                from bson.objectid import ObjectId
+                query_user_ids = [str(user_id)]
+                if ObjectId.is_valid(str(user_id)):
+                    query_user_ids.append(ObjectId(str(user_id)))
+                query["user_id"] = {"$in": query_user_ids}
+
+            # Fetch titles for this specific user (or all if user_id is None) to compare
+            projection = None if (return_doc or update_sync_date) else {"title": 1, "user_id": 1}
+            books = self.db[collection].find(query, projection)
             from thefuzz import fuzz
             new_title_lower = new_title.lower()
-            print(f"\n🔍 Checking API/OCR title: '{new_title}' against DB titles...")
+            print(f"\n🔍 Checking API/OCR title: '{new_title}' against DB titles (user_id: {user_id})...")
             for b in books:
                 t = b.get("title", "")
                 if not t: continue
@@ -116,11 +124,11 @@ class DBConnector:
                 similarity = fuzz.token_sort_ratio(new_title_lower, t.lower())
                 if similarity >= 90:
                     print(f"   ↳ DB Title: '{t}' | Score: {similarity}%")
-                    print(f"   ✅ Match found! (Score: {similarity}%) Skipping duplicate.")
+                    print(f"   ✅ Match found! (Score: {similarity}%) Skipping duplicate for user {user_id}.")
                     if update_sync_date:
                         self.update_book_sync_date(collection, b)
                     return b if return_doc else True
-            print("   ❌ No match found >= 90%. Book is unique.")
+            print("   ❌ No match found >= 90%. Book is unique for this user.")
             return None if return_doc else False
         except Exception as e:
             print(f"❌ DB title check error: {e}")
