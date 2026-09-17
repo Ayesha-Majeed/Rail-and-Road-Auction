@@ -4319,7 +4319,8 @@ class SyncApp(ctk.CTk):
                     # 3. DB Check (Title matching) AFTER OCR
                     try:
                         if extracted_title:
-                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True)
+                            user_id = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True, user_id=user_id)
                             if matched_doc:
                                 self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Sync date updated in DB & skipping.")
                                 # Save the matched DB document to memory so the preview page can display it!
@@ -4660,7 +4661,8 @@ class SyncApp(ctk.CTk):
         if title_str:
             try:
                 if self.db_connector:
-                    matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True)
+                    user_id = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                    matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True, user_id=user_id)
                     if matched_doc:
                         self._log(f"  ⏭️  API Title '{title_str}' matches an existing book (90%+). Sync date updated in DB & skipping heavy OCR.")
                         return {"duplicate": True, "doc": matched_doc}
@@ -4759,7 +4761,8 @@ class SyncApp(ctk.CTk):
                     try:
                         coll = self.config.get("collection", "Book Data")
                         if self.db_connector:
-                            matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True)
+                            user_id = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                            matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True, update_sync_date=True, user_id=user_id)
                             if matched_doc:
                                 self._log(f"  ⏭️  Extracted Title '{title_str}' matches an existing book (90%+). Sync date updated in DB & skipping heavy AI.")
                                 return {"duplicate": True, "doc": matched_doc}
@@ -4954,7 +4957,8 @@ class SyncApp(ctk.CTk):
                                     # Check DB based on extracted title
                                     try:
                                         if extracted_title and self.db_connector:
-                                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True)
+                                            user_id = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True, update_sync_date=True, user_id=user_id)
                                             if matched_doc:
                                                 self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Sync date updated in DB & skipping.")
                                                 self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc}

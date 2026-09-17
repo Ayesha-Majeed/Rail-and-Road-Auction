@@ -313,10 +313,55 @@ def extract_isbn_from_image(image_path: str, log_fn=print, is_cover=False):
 
 # ─── METADATA ENRICHMENT ─────────────────────────────────────────────────────
 
+def fetch_metadata_openlibrary(isbn: str, log_fn=print) -> dict | None:
+    url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    log_fn(f"  🌐 Calling OpenLibrary API (Fallback) for ISBN: {isbn}")
+    try:
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json()
+            key = f"ISBN:{isbn}"
+            if key in data:
+                b = data[key]
+                authors_list = [a.get("name", "") for a in b.get("authors", [])]
+                publishers = [p.get("name", "") for p in b.get("publishers", [])]
+                
+                desc = b.get("notes", "") or b.get("subtitle", "")
+                if isinstance(b.get("excerpts"), list) and b["excerpts"]:
+                    desc = b["excerpts"][0].get("text", desc)
+                if isinstance(desc, dict):
+                    desc = desc.get("value", "")
+                    
+                log_fn(f"  ✅ OpenLibrary API Success!")
+                return {
+                    "title":          b.get("title", "N/A"),
+                    "subtitle":       b.get("subtitle", "N/A"),
+                    "authors":        ", ".join(authors_list) if authors_list else "N/A",
+                    "publisher":      ", ".join(publishers) if publishers else "N/A",
+                    "published_date": b.get("publish_date", "N/A"),
+                    "description":    desc or "N/A",
+                    "isbn_10":        isbn if len(isbn) == 10 else "N/A",
+                    "isbn_13":        isbn if len(isbn) == 13 else "N/A",
+                    "categories":     "N/A",
+                    "page_count":     b.get("number_of_pages", "N/A"),
+                    "thumbnail":      b.get("cover", {}).get("medium", "N/A"),
+                    "edition":        "N/A",
+                    "other_volumes":  []
+                }
+            else:
+                log_fn(f"  📡 OpenLibrary OK | No items found for: {isbn}")
+    except Exception as e:
+        log_fn(f"  ⚠️ OpenLibrary API error: {e}")
+    return None
+
+
 def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
     if not GOOGLE_BOOKS_API_KEY:
         log_fn("  ⚠️ Google Books API Key missing.")
-        return None
+        return fetch_metadata_openlibrary(isbn, log_fn)
 
     # Hardened headers to bypass common bot filters
     headers = {
@@ -328,15 +373,15 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
     safe_key = f"{GOOGLE_BOOKS_API_KEY[:4]}...{GOOGLE_BOOKS_API_KEY[-4:]}" if len(GOOGLE_BOOKS_API_KEY)>8 else "..."
     log_fn(f"  🌍 Calling Google API: q=isbn:{isbn} (key={safe_key})")
     
-    # SENIOR-GRADE: SSL Resilience for Windows Portable App
-    request_kwargs = {"headers": headers, "timeout": 15, "verify": True}
+    # SENIOR-GRADE: SSL Resilience for Windows Portable App with shorter timeout
+    request_kwargs = {"headers": headers, "timeout": (4, 8), "verify": True}
     try:
         import certifi
         request_kwargs["verify"] = certifi.where()
     except ImportError:
         pass
 
-    for attempt in range(1, 4):  # Up to 3 attempts
+    for attempt in range(1, 3):  # Up to 2 attempts for faster fallback
         try:
             try:
                 resp = requests.get(url, **request_kwargs)
@@ -372,13 +417,13 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
                         "other_volumes":  other_vols
                     }
                 else:
-                    log_fn(f"  📡 API OK | No items found for: {isbn}")
-                    return None
+                    log_fn(f"  📡 Google API OK | No items found for: {isbn}. Trying OpenLibrary fallback...")
+                    return fetch_metadata_openlibrary(isbn, log_fn)
             
             elif resp.status_code == 503:
-                log_fn(f"  ⏳ API 503 (Unavailable) - Attempt {attempt}/3. Waiting...")
-                if attempt < 3:
-                    time.sleep(2 * attempt)
+                log_fn(f"  ⏳ API 503 (Unavailable) - Attempt {attempt}/2. Waiting...")
+                if attempt < 2:
+                    time.sleep(1.5)
                     continue
             
             # Handle other errors
@@ -389,25 +434,23 @@ def fetch_metadata_google(isbn: str, log_fn=print) -> dict | None:
                 # POPUP for Daily Limit or Rate Limit
                 if resp.status_code in [403, 429] and ("limit" in err_msg.lower() or "quota" in err_msg.lower()):
                     try:
-                        # Use a thread-safe way to show message if possible, 
-                        # but usually tkinter calls from threads work if it's just a messagebox.
                         messagebox.showwarning("API Limit Hit", 
                             f"Google Books API Daily Limit Exceeded!\n\n"
                             f"Error: {err_msg}\n\n"
-                            "Metadata will be 'N/A' for remaining books today unless you use a different API key.")
+                            "Falling back to OpenLibrary API for metadata.")
                     except: pass
             else:
                 log_fn(f"  📡 API Status: {resp.status_code}")
-            return None
+            return fetch_metadata_openlibrary(isbn, log_fn)
 
         except Exception as e:
             log_fn(f"  ⚠️ Meta API error (Attempt {attempt}): {e}")
-            if attempt < 3:
+            if attempt < 2:
                 time.sleep(1)
                 continue
-            return None
     
-    return None
+    # Fall back to OpenLibrary if Google Books API completely fails or times out
+    return fetch_metadata_openlibrary(isbn, log_fn)
 
 def fetch_metadata_local_ai(image_path: str, accumulated_text: str = "", log_fn=print) -> dict:
     """Zero-logic fallback using Vision model for basic info + collected OCR text."""
