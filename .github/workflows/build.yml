@@ -68,6 +68,9 @@ jobs:
         --collect-all tokenizers `
         --collect-all huggingface_hub `
         --collect-all regex `
+        --collect-all pymongo `
+        --collect-all certifi `
+        --collect-all dns `
         --hidden-import=numpy `
         --hidden-import=yaml `
         --hidden-import=easyocr.easyocr `
@@ -75,6 +78,9 @@ jobs:
         --hidden-import=skimage.filters `
         --hidden-import=torchvision.transforms `
         --hidden-import=dns `
+        --hidden-import=dns.resolver `
+        --hidden-import=dns.rdatatype `
+        --hidden-import=backend.dinov2_model `
         --collect-all customtkinter `
         DesktopApp/main.py
     
@@ -88,3 +94,4 @@ jobs:
         name: BookSync-Windows-Portable
         path: BookSync-Windows-Portable.zip
         retention-days: 3
+
