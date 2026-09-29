@@ -66,12 +66,18 @@ _models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if _models_dir not in sys.path:
     sys.path.append(_models_dir)
 try:
-    from models.train_phase5 import DINOv2DualStream, clean_transform
-except ImportError:
+    from backend.dinov2_model import DINOv2DualStream, clean_transform
+except Exception:
     try:
-        from train_phase5 import DINOv2DualStream, clean_transform
-    except ImportError as e:
-        print(f"Warning: DINOv2DualStream not found. {e}")
+        from models.dinov2_model import DINOv2DualStream, clean_transform
+    except Exception:
+        try:
+            from models.train_phase5 import DINOv2DualStream, clean_transform
+        except Exception:
+            try:
+                from train_phase5 import DINOv2DualStream, clean_transform
+            except Exception as e:
+                print(f"Warning: DINOv2DualStream not found: {e}")
 
 import re
 import difflib
@@ -144,14 +150,27 @@ class TrainSlidesAnalyzer:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             models_dir = os.path.join(os.path.dirname(base_dir), "models")
         
+        exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else ""
+        cwd_dir = os.getcwd()
+
         def get_path(filename):
             paths_to_check = [
                 os.path.join(models_dir, filename),
                 os.path.join(models_dir, "weights", filename),
-                os.path.join(os.path.dirname(sys.executable), "models", filename) if getattr(sys, 'frozen', False) else "",
             ]
+            if exe_dir:
+                paths_to_check.extend([
+                    os.path.join(exe_dir, "models", filename),
+                    os.path.join(exe_dir, "weights", filename),
+                    os.path.join(exe_dir, filename),
+                ])
+            paths_to_check.extend([
+                os.path.join(cwd_dir, "models", filename),
+                os.path.join(cwd_dir, "weights", filename),
+                os.path.join(cwd_dir, filename),
+            ])
             for p_check in paths_to_check:
-                if os.path.exists(p_check):
+                if p_check and os.path.exists(p_check):
                     return p_check
             return os.path.join(models_dir, filename)
 
@@ -170,14 +189,22 @@ class TrainSlidesAnalyzer:
             self.val_emb_file = ""
             
         try:
-            from models.train_phase5 import clean_transform
+            from backend.dinov2_model import clean_transform
             self.transform = clean_transform
-        except ImportError:
-            self.transform = T.Compose([
-                T.Resize((518, 518)),
-                T.ToTensor(), 
-                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+        except Exception:
+            try:
+                from models.dinov2_model import clean_transform
+                self.transform = clean_transform
+            except Exception:
+                try:
+                    from models.train_phase5 import clean_transform
+                    self.transform = clean_transform
+                except Exception:
+                    self.transform = T.Compose([
+                        T.Resize((518, 518)),
+                        T.ToTensor(), 
+                        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                    ])
         
         self.lock = threading.Lock()
         self.loaded = False

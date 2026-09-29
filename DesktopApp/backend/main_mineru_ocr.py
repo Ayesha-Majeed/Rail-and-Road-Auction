@@ -45,6 +45,8 @@ import ollama
 import cv2
 import numpy as np
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from typing import Optional
 
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -438,37 +440,148 @@ def save_ocr_outputs(all_results: list, output_folder: str):
 
 
 # ════════════════════════════════════════════════════
-# AI EXTRACTION HELPER
+# AI EXTRACTION HELPER (PYDANTIC STRUCTURED MODELS)
 # ════════════════════════════════════════════════════
 
-def extract_title_from_cover_image(image_path: str, custom_prompt: str = "") -> str:
-    log_progress(f"Sending cover to {VISION_MODEL}")
-    
-    prompt = custom_prompt or """Look at this book cover carefully. What is the PRIMARY TITLE of this book?
-Rules:
-1. Extract only the MAIN TITLE and its SUBTITLE.
-2. Ignore decorative text, secondary headings, lists of cities, or marketing slogans.
-3. Be concise and professional.
-4. Return ONLY the title text. No explanation. No "The title is...". Just the title itself."""
+class BookTitleInfo(BaseModel):
+    title: str = Field(
+        default="",
+        description="The primary main title of the book without volume or part numbers."
+    )
+    volume: Optional[str] = Field(
+        default=None,
+        description="The volume, part, book number, or edition designation if present (e.g. 'Volume 1', 'Vol. 2', 'Part II', 'Book 3', 'Volume V'). Return null if none exists."
+    )
+    subtitle: Optional[str] = Field(
+        default=None,
+        description="Secondary subtitle of the book if present, or null if none."
+    )
+
+    @property
+    def display_title(self) -> str:
+        """
+        Formats a clean, complete title combining main title and volume if present.
+        Example: 'Railroad Critters in Color Volume 5'
+        """
+        clean_title = (self.title or "").strip().rstrip(",:- ")
+        clean_vol = (self.volume or "").strip()
+        if clean_vol:
+            # If clean_vol is just a number or roman numeral or letter, format it with 'Volume ' prefix
+            if clean_vol.isdigit() or clean_vol.lower() in ("i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "s"):
+                formatted_vol = f"Volume {clean_vol.upper() if not clean_vol.isdigit() else clean_vol}"
+            elif not any(clean_vol.lower().startswith(p) for p in ["vol", "part", "book", "pt", "v.", "bk"]):
+                formatted_vol = f"Volume {clean_vol}"
+            else:
+                formatted_vol = clean_vol
+
+            # If the title already ends with or includes the volume, avoid duplicate appending
+            if formatted_vol.lower() in clean_title.lower():
+                return clean_title
+            return f"{clean_title} {formatted_vol}".strip()
+        return clean_title
+
+
+def extract_title_info_from_cover(image_path: str) -> BookTitleInfo:
+    """
+    Extracts structured title and volume information from a book cover using Vision LLM and Pydantic.
+    Ensures multi-volume sets (Volume 1, Volume 2, etc.) are accurately distinguished and never duplicated.
+    """
+    if not image_path or not os.path.exists(image_path):
+        return BookTitleInfo(title="", volume=None, subtitle=None)
+
+    prompt = """Look at this book cover image very carefully.
+Extract the book's primary title and volume/part info.
+
+CRITICAL RULES:
+1. "title": Extract the FULL PRIMARY TITLE of the book including any header/series words (e.g. "Railroad Critters in Color", NOT just "Critters"). Include all title words visible on the cover. Do NOT include the volume here.
+2. "volume": If there is a volume, part, or book number on the cover (e.g. "Volume 5", "Vol. 2", "Part 1", "Volume S"), extract the full phrase with the word "Volume" (e.g. "Volume 5"). Do NOT return just a naked number like "5". If no volume exists, return null.
+3. "subtitle": Secondary subtitle if visible on the cover, otherwise null.
+4. Ignore author names, price tags, and publisher logos."""
 
     try:
+        # Use Pydantic schema for structured output via Ollama
+        schema = BookTitleInfo.model_json_schema()
         response = ollama.chat(
             model=VISION_MODEL,
-            messages=[{"role": "user", "content": prompt, "images": [image_path]}]
+            messages=[{"role": "user", "content": prompt, "images": [image_path]}],
+            format=schema
         )
-        title = response["message"]["content"].strip()
-        # Clean up AI phrases and formatting
-        title = re.sub(r'[\{\}]', '', title)
-        title = re.sub(r'(?i)^(title|book title|the title|the book title is|this is)[:\-\s]+', '', title).strip()
-        # Consolidate multiline titles into one line
-        title = " ".join([line.strip() for line in title.split('\n') if line.strip()])
-        title = title.strip('"\'').strip(':').strip()
-        
-        log_done(f'"{title}"')
-        return title
+        content = response.get("message", {}).get("content", "").strip()
+        info = BookTitleInfo.model_validate_json(content)
+        # Clean title text from accidental curly braces or labels
+        info.title = re.sub(r'[\{\}]', '', info.title)
+        info.title = re.sub(r'(?i)^(title|book title|the title)[:\-\s]+', '', info.title).strip().strip('"\'')
+        return info
     except Exception as e:
-        log_fail(str(e))
-        return ""
+        log_fail(f"Pydantic extraction attempt with schema failed ({e}). Attempting fallback parsing...")
+        try:
+            # Fallback asking for JSON if direct schema wasn't accepted
+            fallback_prompt = prompt + "\n\nReturn ONLY a valid JSON object matching: {\"title\": \"...\", \"volume\": \"Volume ...\", \"subtitle\": null}"
+            response = ollama.chat(
+                model=VISION_MODEL,
+                messages=[{"role": "user", "content": fallback_prompt, "images": [image_path]}],
+                format="json"
+            )
+            content = response.get("message", {}).get("content", "").strip()
+            content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
+            content = re.sub(r"\s*```$", "", content)
+            parsed = json.loads(content)
+            clean_title = re.sub(r'[\{\}]', '', str(parsed.get("title", "")))
+            clean_title = re.sub(r'(?i)^(title|book title|the title)[:\-\s]+', '', clean_title).strip().strip('"\'')
+            return BookTitleInfo(
+                title=clean_title,
+                volume=str(parsed.get("volume")).strip() if parsed.get("volume") else None,
+                subtitle=str(parsed.get("subtitle")).strip() if parsed.get("subtitle") else None
+            )
+        except Exception as e2:
+            log_fail(f"Fallback extraction failed: {e2}")
+            return BookTitleInfo(title="", volume=None, subtitle=None)
+
+
+def extract_title_from_cover_image(image_path: str, custom_prompt: str = "") -> str:
+    """
+    Extracts the full title from the cover image.
+    Uses structured Pydantic extraction to ensure volume information (e.g. Volume 1 vs Volume 2) is captured.
+    """
+    log_progress(f"Sending cover to {VISION_MODEL}")
+    
+    if custom_prompt:
+        try:
+            response = ollama.chat(
+                model=VISION_MODEL,
+                messages=[{"role": "user", "content": custom_prompt, "images": [image_path]}]
+            )
+            raw = response.get("message", {}).get("content", "").strip()
+            return raw
+        except Exception as e:
+            log_fail(str(e))
+            return ""
+
+    info = extract_title_info_from_cover(image_path)
+    if info and info.title:
+        title = info.display_title
+        log_done(f'"{title}"' + (f' [Vol: {info.volume}]' if info.volume else ""))
+        
+        # Prominent console output for easy user verification
+        print(f"\n{'='*65}", flush=True)
+        print(f"📘 [PYDANTIC EXTRACTION]", flush=True)
+        print(f"   🏷️  Title   : {info.title}", flush=True)
+        print(f"   🔢 Volume  : {info.volume}", flush=True)
+        if info.subtitle:
+            print(f"   🔖 Subtitle: {info.subtitle}", flush=True)
+        print(f"   🚀 Final Display Title: {title}", flush=True)
+        print(f"{'='*65}\n", flush=True)
+
+        if LOG_CALLBACK:
+            try:
+                vol_str = f", Volume: '{info.volume}'" if info.volume else ""
+                LOG_CALLBACK(f"  📘 [Pydantic Title]: '{info.title}'{vol_str} -> '{title}'")
+            except:
+                pass
+
+        return title
+
+    return ""
 
 
 def extract_author_from_cover(front: str, back: str = "") -> str:
