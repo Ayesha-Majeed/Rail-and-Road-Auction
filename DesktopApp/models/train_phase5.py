@@ -41,8 +41,9 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-SPLIT_DIR       = r"F:\Ayesha\Rail_Road_Auctions\RailRoad_Split_Dataset\RailRoad_Split_Dataset"
-SAVE_DIR        = r"F:\Ayesha\Rail_Road_Auctions\DINOv2_Railroad_Pipeline"
+BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
+SPLIT_DIR       = os.environ.get("SPLIT_DIR", os.path.join(BASE_DIR, "RailRoad_Split_Dataset"))
+SAVE_DIR        = os.environ.get("SAVE_DIR", os.path.join(BASE_DIR, "DINOv2_Railroad_Pipeline"))
 CHECKPOINT_PATH = os.path.join(SAVE_DIR, "checkpoints", "phase5_checkpoint.pth")
 BEST_PATH       = os.path.join(SAVE_DIR, "checkpoints", "phase5_best.pth")
 LOG_PATH        = os.path.join(SAVE_DIR, "logs", "phase5_training_log.json")
@@ -50,9 +51,6 @@ BASE_MODEL      = os.path.join(SAVE_DIR, "checkpoints", "phase4_best.pth")
 
 WANDB_PROJECT   = "DINOv2-Railroad"
 WANDB_ENTITY    = "mlbenchpvtltd-ml-bench"
-
-os.makedirs(os.path.join(SAVE_DIR, "checkpoints"), exist_ok=True)
-os.makedirs(os.path.join(SAVE_DIR, "logs"),        exist_ok=True)
 
 EPOCHS          = 150
 PATIENCE        = 30
@@ -108,9 +106,9 @@ class DualStreamDataset(Dataset):
         self.split      = split
         self.samples    = []
         
-        self.crops_dict = {}
-        crops_json_path = r"F:\Ayesha\Rail_Road_Auctions\DINOv2_Railroad_Pipeline\crops.json"
-        if os.path.exists(crops_json_path):
+        crops_json_path = os.environ.get("CROPS_JSON", os.path.join(SAVE_DIR, "crops.json"))
+        if not os.path.exists(crops_json_path):
+            crops_json_path = os.path.join(BASE_DIR, "crops.json")
             with open(crops_json_path, 'r') as f:
                 self.crops_dict = json.load(f)
 
@@ -383,6 +381,9 @@ def get_hard_triplets(model, dataset, device, margin=MARGIN, batch_size=32):
 
 def main():
     global BATCH_SIZE, HARD_MINE_BATCH, MINE_BATCH_SIZE
+
+    os.makedirs(os.path.join(SAVE_DIR, "checkpoints"), exist_ok=True)
+    os.makedirs(os.path.join(SAVE_DIR, "logs"),        exist_ok=True)
 
     wandb_mode = "online" if _has_internet() else "offline"
     print(f"  WandB mode   : {wandb_mode}" + (" (no internet — logs saved locally)" if wandb_mode == "offline" else ""))

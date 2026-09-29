@@ -15,8 +15,10 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 
-# We import the model class and transforms from train_phase5.py
-from train_phase5 import DINOv2DualStream, PadToSquare, clean_transform, EMBEDDING_DIM
+try:
+    from dinov2_model import DINOv2DualStream, PadToSquare, clean_transform, EMBEDDING_DIM
+except ImportError:
+    from train_phase5 import DINOv2DualStream, PadToSquare, clean_transform, EMBEDDING_DIM
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
