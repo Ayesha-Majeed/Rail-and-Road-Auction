@@ -181,10 +181,10 @@ class TrainSlidesAnalyzer:
         local_val_emb_pt = get_path("val_embeddings.pt")
         local_temp_emb_pt = get_path("temp_embeddings.pt")
         
-        if os.path.exists(local_temp_emb_pt):
-            self.val_emb_file = local_temp_emb_pt
-        elif os.path.exists(local_val_emb_pt):
+        if os.path.exists(local_val_emb_pt):
             self.val_emb_file = local_val_emb_pt
+        elif os.path.exists(local_temp_emb_pt):
+            self.val_emb_file = local_temp_emb_pt
         else:
             self.val_emb_file = ""
             
@@ -419,13 +419,19 @@ class TrainSlidesAnalyzer:
         log("  -> Step 3/5: Running DINOv2 embedding extraction and hybrid matching...")
         
         try:
-            from models.train_phase5 import PadToSquare
+            from backend.dinov2_model import PadToSquare
             padder = PadToSquare()
             g_final = padder(glob_crop_pil)
             l_final = padder(loc_crop_pil)
         except ImportError:
-            g_final = self.padded_resize(glob_crop_pil, 518)
-            l_final = self.padded_resize(loc_crop_pil, 518)
+            try:
+                from models.dinov2_model import PadToSquare
+                padder = PadToSquare()
+                g_final = padder(glob_crop_pil)
+                l_final = padder(loc_crop_pil)
+            except ImportError:
+                g_final = self.padded_resize(glob_crop_pil, 518)
+                l_final = self.padded_resize(loc_crop_pil, 518)
         
         g_tensor = self.transform(g_final).unsqueeze(0).to(self.device)
         l_tensor = self.transform(l_final).unsqueeze(0).to(self.device)

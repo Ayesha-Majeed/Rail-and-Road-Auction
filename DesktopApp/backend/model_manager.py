@@ -21,11 +21,24 @@ def get_app_dir():
 BASE_DIR = get_app_dir()
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
+def get_doclayout_yolo_path():
+    candidates = [
+        os.path.join(BASE_DIR, "doclayout_yolo_docstructbench_imgsz1024.pt"),
+        os.path.join(MODELS_DIR, "doclayout_yolo_docstructbench_imgsz1024.pt"),
+        os.path.join(BASE_DIR, "weights", "doclayout_yolo_docstructbench_imgsz1024.pt"),
+        os.path.join(os.getcwd(), "doclayout_yolo_docstructbench_imgsz1024.pt"),
+        os.path.join(os.getcwd(), "models", "doclayout_yolo_docstructbench_imgsz1024.pt"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return os.path.join(BASE_DIR, "doclayout_yolo_docstructbench_imgsz1024.pt")
+
 MODEL_SOURCES = {
     "yolo": {
         "filename": "doclayout_yolo_docstructbench_imgsz1024.pt",
         "url": "https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench/resolve/main/doclayout_yolo_docstructbench_imgsz1024.pt",
-        "target": os.path.join(BASE_DIR, "doclayout_yolo_docstructbench_imgsz1024.pt")
+        "target": get_doclayout_yolo_path()
     },
     "easyocr_en": {
         "filename": "english_g2.zip",
@@ -74,6 +87,7 @@ def health_check(progress_callback=None):
 
         # 2. Check YOLO
         yolo_cfg = MODEL_SOURCES["yolo"]
+        yolo_cfg["target"] = get_doclayout_yolo_path()
         if os.path.exists(yolo_cfg["target"]):
             # Safety: If file is too small (< 1MB), it's likely a text error message from the server
             if os.path.getsize(yolo_cfg["target"]) < 1024 * 1024:
