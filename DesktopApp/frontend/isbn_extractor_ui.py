@@ -459,7 +459,8 @@ def fetch_metadata_local_ai(image_path: str, accumulated_text: str = "", log_fn=
     
     prompt = (
         "Extract these details from this book image (Front Cover):\n"
-        "1. Title\n2. Author(s)\n3. Edition (ONLY if explicitly mentioned, otherwise \"N/A\")\n"
+        "1. Title: The full title including series header and volume if visible (e.g. 'Railroad Critters in Color Volume 5')\n"
+        "2. Author(s)\n3. Edition (ONLY if explicitly mentioned, otherwise \"N/A\")\n"
         "4. Description (1-2 sentences summarizing the book based on title and provided text context below)\n"
         f"{text_context}\n"
         "RULES: If any detail is missing or ambiguous, return \"N/A\". DO NOT GUESS DATES OR YEARS.\n"
