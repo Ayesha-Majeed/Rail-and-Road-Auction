@@ -879,15 +879,23 @@ class AddNewClassWindow:
                 val_path = find_w("val_embeddings.pt")
                 temp_path = find_w("temp_embeddings.pt")
                 
+                val_data = {"embeddings": None, "labels": []}
                 existing_embs = []
                 if os.path.exists(val_path):
-                    existing_embs.append(torch.load(val_path, map_location=device, weights_only=True)["embeddings"])
+                    val_data = torch.load(val_path, map_location=device, weights_only=True)
+                    if val_data.get("embeddings") is not None:
+                        existing_embs.append(val_data["embeddings"])
                 
-                temp_data = {"embeddings": None, "labels": []}
+                # If an older temp file exists, merge its embeddings as well
                 if os.path.exists(temp_path):
-                    temp_data = torch.load(temp_path, map_location=device, weights_only=True)
-                    if temp_data["embeddings"] is not None:
-                        existing_embs.append(temp_data["embeddings"])
+                    t_data = torch.load(temp_path, map_location=device, weights_only=True)
+                    if t_data.get("embeddings") is not None:
+                        existing_embs.append(t_data["embeddings"])
+                        if val_data["embeddings"] is not None:
+                            val_data["embeddings"] = torch.cat([val_data["embeddings"], t_data["embeddings"]], dim=0)
+                        else:
+                            val_data["embeddings"] = t_data["embeddings"]
+                        val_data["labels"].extend(t_data.get("labels", []))
                         
                 if existing_embs:
                     all_existing = torch.cat(existing_embs, dim=0)
@@ -938,16 +946,16 @@ class AddNewClassWindow:
                     all_existing = torch.cat([all_existing, emb], dim=0)
                     processed += 1
                     
-                # 4. Save to temp
+                # 4. Save directly into val_embeddings.pt
                 if new_embs:
                     stacked_new = torch.cat(new_embs, dim=0)
-                    if temp_data["embeddings"] is not None:
-                        temp_data["embeddings"] = torch.cat([temp_data["embeddings"], stacked_new], dim=0)
+                    if val_data["embeddings"] is not None:
+                        val_data["embeddings"] = torch.cat([val_data["embeddings"], stacked_new], dim=0)
                     else:
-                        temp_data["embeddings"] = stacked_new
-                    temp_data["labels"].extend(new_labels)
+                        val_data["embeddings"] = stacked_new
+                    val_data["labels"].extend(new_labels)
                     
-                    torch.save(temp_data, temp_path)
+                    torch.save(val_data, val_path)
                     
                 self.top.after(0, self._hide_loader)
                 
@@ -4105,7 +4113,7 @@ class SyncApp(ctk.CTk):
             if not getattr(analyzer, 'dino_weights', None) or not os.path.exists(analyzer.dino_weights):
                 missing_weights.append("phase5_best.pth (DINOv2 Classifier)")
             if not getattr(analyzer, 'val_emb_file', None) or not os.path.exists(analyzer.val_emb_file):
-                missing_weights.append("val_embeddings.pt or temp_embeddings.pt (Railroad embeddings)")
+                missing_weights.append("val_embeddings.pt (Railroad embeddings)")
                 
             if missing_weights:
                 missing_list_str = "\n".join([f" • {w}" for w in missing_weights])
