@@ -44,10 +44,12 @@ jobs:
     - name: Build EXE
       run: |
         pyinstaller --noconfirm --onedir --windowed --name "BookSync" `
+        --add-data "DesktopApp/icons;icons" `
         --add-data "DesktopApp/frontend/icons;frontend/icons" `
         --add-data "DesktopApp/olive_high.json;." `
         --add-data "DesktopApp/sync_config.json;." `
         --add-data "DesktopApp/.env;." `
+        --add-data "DesktopApp/doclayout_yolo_docstructbench_imgsz1024.pt;." `
         --add-data "DesktopApp/backend;backend" `
         --add-data "DesktopApp/frontend;frontend" `
         --collect-all magic-pdf `
@@ -71,6 +73,12 @@ jobs:
         --collect-all pymongo `
         --collect-all certifi `
         --collect-all dns `
+        --collect-all customtkinter `
+        --collect-all CTkMessagebox `
+        --collect-all cryptography `
+        --collect-all thefuzz `
+        --collect-all loguru `
+        --collect-all pydantic `
         --hidden-import=numpy `
         --hidden-import=yaml `
         --hidden-import=easyocr.easyocr `
@@ -80,8 +88,21 @@ jobs:
         --hidden-import=dns `
         --hidden-import=dns.resolver `
         --hidden-import=dns.rdatatype `
+        --hidden-import=cryptography `
+        --hidden-import=cryptography.hazmat.primitives.ciphers.aead `
+        --hidden-import=backend.crypto_utils `
+        --hidden-import=backend.db_connector `
+        --hidden-import=backend.book_grouper `
+        --hidden-import=backend.column_cropper `
+        --hidden-import=backend.error_handler `
+        --hidden-import=backend.main_mineru_ocr `
+        --hidden-import=backend.model_manager `
+        --hidden-import=backend.train_slides_logic `
         --hidden-import=backend.dinov2_model `
-        --collect-all customtkinter `
+        --hidden-import=frontend.sync_app_ui `
+        --hidden-import=frontend.interactive_cropper `
+        --hidden-import=frontend.isbn_extractor_ui `
+        --hidden-import=frontend.train_slides_ui `
         DesktopApp/main.py
     
     - name: Compress Build with 7-Zip (Ultra)
@@ -94,4 +115,3 @@ jobs:
         name: BookSync-Windows-Portable
         path: BookSync-Windows-Portable.zip
         retention-days: 3
-
