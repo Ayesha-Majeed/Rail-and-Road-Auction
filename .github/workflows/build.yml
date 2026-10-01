@@ -30,14 +30,14 @@ jobs:
     
     - name: Create default config
       run: |
-        echo '{"mongo_uri":"mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test","db_name":"Test","collection":"Book Data","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
+        echo '{"mongo_uri":"${{ secrets.MONGO_URI || "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" }}","db_name":"${{ secrets.DB_NAME || "Test" }}","collection":"${{ secrets.COLLECTION || "Book Data" }}","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
     
     - name: Create .env for build
       run: |
-        echo "MONGO_URI=mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" > DesktopApp/.env
-        echo "DB_NAME=Test" >> DesktopApp/.env
-        echo "COLLECTION=Book Data" >> DesktopApp/.env
-        echo "GOOGLE_BOOKS_API_KEY=AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" >> DesktopApp/.env
+        echo "MONGO_URI=${{ secrets.MONGO_URI || "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" }}" > DesktopApp/.env
+        echo "DB_NAME=${{ secrets.DB_NAME || "Test" }}" >> DesktopApp/.env
+        echo "COLLECTION=${{ secrets.COLLECTION || "Book Data" }}" >> DesktopApp/.env
+        echo "GOOGLE_BOOKS_API_KEY=${{ secrets.GOOGLE_BOOKS_API_KEY || "AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" }}" >> DesktopApp/.env
         echo "VISION_MODEL=minicpm-v:latest" >> DesktopApp/.env
         echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
     
@@ -49,7 +49,6 @@ jobs:
         --add-data "DesktopApp/olive_high.json;." `
         --add-data "DesktopApp/sync_config.json;." `
         --add-data "DesktopApp/.env;." `
-        --add-data "DesktopApp/doclayout_yolo_docstructbench_imgsz1024.pt;." `
         --add-data "DesktopApp/backend;backend" `
         --add-data "DesktopApp/frontend;frontend" `
         --collect-all magic-pdf `
@@ -57,12 +56,12 @@ jobs:
         --collect-all doclayout-yolo `
         --collect-all ultralytics `
         --collect-all torch `
+        --collect-all torchvision `
         --collect-all shapely `
         --collect-all pyclipper `
         --collect-all lmdb `
         --collect-all imgaug `
         --collect-all skimage `
-        --collect-all torchvision `
         --collect-all numpy `
         --collect-all transformers `
         --collect-all timm `
@@ -71,6 +70,7 @@ jobs:
         --collect-all huggingface_hub `
         --collect-all regex `
         --collect-all pymongo `
+        --collect-all bson `
         --collect-all certifi `
         --collect-all dns `
         --collect-all customtkinter `
@@ -79,6 +79,11 @@ jobs:
         --collect-all thefuzz `
         --collect-all loguru `
         --collect-all pydantic `
+        --collect-all ollama `
+        --collect-all cv2 `
+        --collect-all PIL `
+        --collect-all dotenv `
+        --collect-all tqdm `
         --hidden-import=numpy `
         --hidden-import=yaml `
         --hidden-import=easyocr.easyocr `
@@ -90,6 +95,14 @@ jobs:
         --hidden-import=dns.rdatatype `
         --hidden-import=cryptography `
         --hidden-import=cryptography.hazmat.primitives.ciphers.aead `
+        --hidden-import=bson `
+        --hidden-import=bson.objectid `
+        --hidden-import=dotenv `
+        --hidden-import=PIL.Image `
+        --hidden-import=PIL.ImageTk `
+        --hidden-import=cv2 `
+        --hidden-import=ollama `
+        --hidden-import=tqdm `
         --hidden-import=backend.crypto_utils `
         --hidden-import=backend.db_connector `
         --hidden-import=backend.book_grouper `
@@ -103,6 +116,9 @@ jobs:
         --hidden-import=frontend.interactive_cropper `
         --hidden-import=frontend.isbn_extractor_ui `
         --hidden-import=frontend.train_slides_ui `
+        --hidden-import=models.dinov2_model `
+        --hidden-import=models.generate_embeddings `
+        --hidden-import=models.train_phase5 `
         DesktopApp/main.py
     
     - name: Compress Build with 7-Zip (Ultra)
