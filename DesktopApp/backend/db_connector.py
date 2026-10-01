@@ -167,6 +167,7 @@ class DBConnector:
                 self.client.admin.command("ping")
                 self.db = self.client[self.db_name]
                 self.connected = True
+                self._ensure_indexes()
                 return True, f"Connected to MongoDB — DB: '{self.db_name}'"
             except Exception as e:
                 detailed_err = str(e)
@@ -181,6 +182,15 @@ class DBConnector:
         
         self.connected = False
         return False, last_error
+
+    def _ensure_indexes(self):
+        """Ensures high-performance indexes on MongoDB collections."""
+        try:
+            if self.db is not None:
+                self.db["Book Data"].create_index("cover_sha256", sparse=True)
+                self.db["Book Data"].create_index("book_id", sparse=True)
+        except Exception:
+            pass
 
     def reconnect(self, silent=False):
         """Attempts to re-establish the MongoDB connection after a transient disconnect/DNS drop."""
@@ -205,6 +215,7 @@ class DBConnector:
             self.client = new_client
             self.db = self.client[self.db_name]
             self.connected = True
+            self._ensure_indexes()
             if old_client:
                 try:
                     old_client.close()
@@ -276,6 +287,16 @@ class DBConnector:
             
             query = {}
             if isinstance(doc_id_or_doc, dict):
+                # Avoid redundant network round-trip if book was synced within the last 5 minutes
+                last_s = doc_id_or_doc.get("last_synced") or doc_id_or_doc.get("synced_at")
+                if last_s:
+                    try:
+                        prev_time = datetime.fromisoformat(str(last_s).replace("Z", "")) if "T" in str(last_s) else datetime.strptime(str(last_s), "%Y-%m-%d %H:%M:%S")
+                        if (datetime.now() - prev_time).total_seconds() < 300:
+                            return True
+                    except Exception:
+                        pass
+
                 if "_id" in doc_id_or_doc:
                     query = {"_id": doc_id_or_doc["_id"]}
                 elif "book_id" in doc_id_or_doc:
@@ -306,8 +327,6 @@ class DBConnector:
                 doc_id_or_doc["sync_date"] = now_iso
                 doc_id_or_doc["last_synced"] = now_str
                 doc_id_or_doc["updated_at"] = now_iso
-
-            print(f"   🔄 Updated sync date in DB for matched book: {now_str}")
             return True
         except Exception as e:
             print(f"❌ Failed to update book sync date: {e}")
@@ -539,6 +558,15 @@ class DBConnector:
             if "created_at" not in doc or not doc["created_at"]:
                 doc["created_at"] = now_iso
 
+            # Auto-populate cover_sha256 if not already present
+            if "cover_sha256" not in doc or not doc["cover_sha256"]:
+                fc = doc.get("front_cover")
+                if isinstance(fc, dict) and fc.get("file_path"):
+                    c_hash = CryptoUtils.compute_file_sha256(fc.get("file_path"))
+                    if c_hash:
+                        doc["cover_sha256"] = c_hash
+                        doc["front_cover"]["sha256"] = c_hash
+
             bid = doc.get("book_id")
             uid = doc.get("user_id")
             if bid:
@@ -565,8 +593,37 @@ class DBConnector:
                             return str(ex["_id"])
 
             result = self.db[collection].insert_one(doc)
+            hash_display = doc.get("cover_sha256")
+            hash_str = f" | SHA-256: {hash_display[:16]}..." if hash_display else ""
+            print(f"   💾 Inserted new book into DB: Book ID {bid} (Doc ID: {result.inserted_id}){hash_str}")
             return str(result.inserted_id)
         return self._execute_with_retry(_insert, op_name=f"insert_book into {collection}")
+
+    def find_by_cover_hash(self, collection, cover_hash, user_id=None, book_id=None):
+        """
+        Fast O(1) lookup of a book by its front cover SHA-256 hash.
+        Returns: document dict if found, else None
+        """
+        if not cover_hash:
+            return None
+        def _find():
+            query = {"cover_sha256": str(cover_hash).strip()}
+            if user_id:
+                from bson.objectid import ObjectId
+                uids = [str(user_id)]
+                if ObjectId.is_valid(str(user_id)):
+                    uids.append(ObjectId(str(user_id)))
+                query["user_id"] = {"$in": uids}
+
+            # If book_id is provided, prioritize matching exact book_id first
+            if book_id is not None:
+                exact = self.db[collection].find_one({**query, "book_id": str(book_id).strip()})
+                if exact:
+                    return exact
+
+            return self.db[collection].find_one(query)
+
+        return self._execute_with_retry(_find, op_name="find_by_cover_hash")
 
     def ping(self):
         try:

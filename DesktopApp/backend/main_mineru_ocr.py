@@ -297,6 +297,11 @@ def crop_book(book_images: list, book_crops_folder: str) -> dict:
     for page_id in pages:
         pages[page_id] = sorted(pages[page_id], key=lambda x: x[0])
 
+    try:
+        cropper.unload_yolo()
+    except Exception:
+        pass
+
     return dict(pages)
 
 
@@ -481,10 +486,37 @@ class BookTitleInfo(BaseModel):
         return clean_title
 
 
+def safe_ollama_chat(messages: list, model: str = None, format=None, timeout: int = 20):
+    """
+    Executes ollama.chat with a strict hard timeout (default 20s) to prevent the application from hanging.
+    Returns response dict or None if timed out / failed.
+    """
+    import concurrent.futures
+    target_model = model or VISION_MODEL
+
+    def _call():
+        kwargs = {"model": target_model, "messages": messages}
+        if format:
+            kwargs["format"] = format
+        return ollama.chat(**kwargs)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_call)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            log_fail(f"Ollama API call timed out after {timeout}s ({target_model}). Proceeding...")
+            return None
+        except Exception as e:
+            log_fail(f"Ollama API call error ({target_model}): {e}")
+            return None
+
+
 def extract_title_info_from_cover(image_path: str) -> BookTitleInfo:
     """
     Extracts structured title and volume information from a book cover using Vision LLM and Pydantic.
     Ensures multi-volume sets (Volume 1, Volume 2, etc.) are accurately distinguished and never duplicated.
+    Protected with non-blocking 25s hard timeout to prevent hangs.
     """
     if not image_path or not os.path.exists(image_path):
         return BookTitleInfo(title="", volume=None, subtitle=None)
@@ -499,29 +531,34 @@ CRITICAL RULES:
 4. Ignore author names, price tags, and publisher logos."""
 
     try:
-        # Use Pydantic schema for structured output via Ollama
+        # Use Pydantic schema for structured output via Ollama with non-blocking timeout
         schema = BookTitleInfo.model_json_schema()
-        response = ollama.chat(
-            model=VISION_MODEL,
+        response = safe_ollama_chat(
             messages=[{"role": "user", "content": prompt, "images": [image_path]}],
-            format=schema
+            model=VISION_MODEL,
+            format=schema,
+            timeout=25
         )
-        content = response.get("message", {}).get("content", "").strip()
-        info = BookTitleInfo.model_validate_json(content)
-        # Clean title text from accidental curly braces or labels
-        info.title = re.sub(r'[\{\}]', '', info.title)
-        info.title = re.sub(r'(?i)^(title|book title|the title)[:\-\s]+', '', info.title).strip().strip('"\'')
-        return info
+        if response:
+            content = response.get("message", {}).get("content", "").strip()
+            info = BookTitleInfo.model_validate_json(content)
+            # Clean title text from accidental curly braces or labels
+            info.title = re.sub(r'[\{\}]', '', info.title)
+            info.title = re.sub(r'(?i)^(title|book title|the title)[:\-\s]+', '', info.title).strip().strip('"\'')
+            return info
     except Exception as e:
         log_fail(f"Pydantic extraction attempt with schema failed ({e}). Attempting fallback parsing...")
-        try:
-            # Fallback asking for JSON if direct schema wasn't accepted
-            fallback_prompt = prompt + "\n\nReturn ONLY a valid JSON object matching: {\"title\": \"...\", \"volume\": \"Volume ...\", \"subtitle\": null}"
-            response = ollama.chat(
-                model=VISION_MODEL,
-                messages=[{"role": "user", "content": fallback_prompt, "images": [image_path]}],
-                format="json"
-            )
+
+    try:
+        # Fallback asking for JSON if direct schema wasn't accepted
+        fallback_prompt = prompt + "\n\nReturn ONLY a valid JSON object matching: {\"title\": \"...\", \"volume\": \"Volume ...\", \"subtitle\": null}"
+        response = safe_ollama_chat(
+            messages=[{"role": "user", "content": fallback_prompt, "images": [image_path]}],
+            model=VISION_MODEL,
+            format="json",
+            timeout=25
+        )
+        if response:
             content = response.get("message", {}).get("content", "").strip()
             content = re.sub(r"^```(?:json)?\s*", "", content, flags=re.IGNORECASE)
             content = re.sub(r"\s*```$", "", content)
@@ -533,26 +570,30 @@ CRITICAL RULES:
                 volume=str(parsed.get("volume")).strip() if parsed.get("volume") else None,
                 subtitle=str(parsed.get("subtitle")).strip() if parsed.get("subtitle") else None
             )
-        except Exception as e2:
-            log_fail(f"Fallback extraction failed: {e2}")
-            return BookTitleInfo(title="", volume=None, subtitle=None)
+    except Exception as e2:
+        log_fail(f"Fallback extraction failed: {e2}")
+
+    return BookTitleInfo(title="", volume=None, subtitle=None)
 
 
 def extract_title_from_cover_image(image_path: str, custom_prompt: str = "") -> str:
     """
     Extracts the full title from the cover image.
-    Uses structured Pydantic extraction to ensure volume information (e.g. Volume 1 vs Volume 2) is captured.
+    Uses fast plain-text Vision LLM call with a 20s hard timeout.
     """
     log_progress(f"Sending cover to {VISION_MODEL}")
     
     if custom_prompt:
         try:
-            response = ollama.chat(
+            response = safe_ollama_chat(
+                messages=[{"role": "user", "content": custom_prompt, "images": [image_path]}],
                 model=VISION_MODEL,
-                messages=[{"role": "user", "content": custom_prompt, "images": [image_path]}]
+                timeout=20
             )
-            raw = response.get("message", {}).get("content", "").strip()
-            return raw
+            if response:
+                raw = response.get("message", {}).get("content", "").strip()
+                return raw
+            return ""
         except Exception as e:
             log_fail(str(e))
             return ""
@@ -622,10 +663,12 @@ RULES:
     for i, img in enumerate(images):
         log_progress(f"Checking {labels[i]} for author")
         try:
-            resp = ollama.chat(
+            resp = safe_ollama_chat(
+                messages=[{"role": "user", "content": prompt, "images": [img]}],
                 model=VISION_MODEL,
-                messages=[{"role": "user", "content": prompt, "images": [img]}]
+                timeout=20
             )
+            if not resp: continue
             res = resp["message"]["content"].strip().strip('"').strip()
             # Clean common AI prefixes
             res = re.sub(
@@ -687,7 +730,8 @@ Text to search:
 {text[:3000]}"""
 
     try:
-        resp = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
+        resp = safe_ollama_chat(messages=[{"role": "user", "content": prompt}], model=VISION_MODEL, timeout=20)
+        if not resp: return ""
         res = resp["message"]["content"].strip().strip('"').strip()
 
         res = re.sub(
@@ -789,7 +833,8 @@ INSTRUCTIONS:
 7. Output ONLY the description. Nothing else."""
 
     try:
-        response = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
+        response = safe_ollama_chat(messages=[{"role": "user", "content": prompt}], model=VISION_MODEL, timeout=20)
+        if not response: return ""
         desc = response["message"]["content"].strip()
         # Strip any lingering AI preamble
         desc = re.sub(
@@ -832,10 +877,12 @@ INSTRUCTIONS:
 8. Output ONLY the description. Nothing else."""
 
     try:
-        response = ollama.chat(
+        response = safe_ollama_chat(
+            messages=[{"role": "user", "content": prompt, "images": valid_paths[:3]}],
             model=VISION_MODEL,
-            messages=[{"role": "user", "content": prompt, "images": valid_paths[:3]}]
+            timeout=20
         )
+        if not response: return ""
         desc = response["message"]["content"].strip()
         desc = re.sub(
             r'^(Here is|This is|A summary of|Description:|Summary:|The book|This book)[^\n]*[:\-]?\s*',
@@ -1058,7 +1105,12 @@ RULES:
     for img in images:
         log_progress(f"Checking {Path(img).name} for edition")
         try:
-            resp = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt, "images": [img]}])
+            resp = safe_ollama_chat(
+                messages=[{"role": "user", "content": prompt, "images": [img]}],
+                model=VISION_MODEL,
+                timeout=20
+            )
+            if not resp: continue
             res = resp["message"]["content"].strip().strip('"').strip()
             
             # If AI returned multiple lines/items, pick the most relevant one
@@ -1104,7 +1156,8 @@ def extract_edition_from_text(text: str, book_title: str = "", isbn: str = "") -
     {text[:3000]}"""
     
     try:
-        resp = ollama.chat(model=VISION_MODEL, messages=[{"role": "user", "content": prompt}])
+        resp = safe_ollama_chat(messages=[{"role": "user", "content": prompt}], model=VISION_MODEL, timeout=20)
+        if not resp: return ""
         res = resp["message"]["content"].strip().strip('"').strip()
         
         validated = _sanity_check_edition(res)
@@ -1151,13 +1204,13 @@ def save_book_metadata(book_id, title, description, output_folder, edition="", a
     log_info("  ISBN",    metadata.get("isbn", "Not Found"))
 
 
-def stop_ollama():
-    """Aggressively stops Ollama and unloads all models to free VRAM (Cross-platform)."""
+def stop_ollama(force_kill=False):
+    """Gracefully unloads all models from VRAM via Ollama API to free GPU memory without killing the server."""
     import requests as _req
     import time
     import platform
     
-    # 1. API Unload (Standard way to free VRAM)
+    # 1. API Unload (Standard way to free VRAM immediately without restarting server)
     try:
         ps = _req.get("http://localhost:11434/api/ps", timeout=2)
         if ps.status_code == 200:
@@ -1168,34 +1221,36 @@ def stop_ollama():
                     _req.post("http://localhost:11434/api/generate", 
                              json={"model": m.get("name"), "keep_alive": 0}, timeout=1)
                 except: continue
-            time.sleep(0.5)
+            time.sleep(0.3)
     except: pass
 
-    # 2. System-Level Kill (Fallback for extreme memory pressure)
-    try:
-        if platform.system() == "Windows":
-            # Using taskkill /F to force stop blocking processes (Hidden on Windows)
-            # CREATE_NO_WINDOW = 0x08000000
-            subprocess.run(["taskkill", "/F", "/IM", "ollama_llama_server.exe", "/T"], 
-                           creationflags=0x08000000, capture_output=True)
-            subprocess.run(["taskkill", "/F", "/IM", "ollama.exe", "/T"], 
-                           creationflags=0x08000000, capture_output=True)
-        else:
-            subprocess.run(["pkill", "-9", "-f", "ollama_llama_server"], capture_output=True)
-            subprocess.run(["pkill", "-9", "-f", "ollama"], capture_output=True)
-    except: pass
-    
-    time.sleep(1.0)
+    # 2. System-Level Kill ONLY if force_kill requested (e.g. exit/shutdown)
+    if force_kill:
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(["taskkill", "/F", "/IM", "ollama_llama_server.exe", "/T"], 
+                               creationflags=0x08000000, capture_output=True)
+                subprocess.run(["taskkill", "/F", "/IM", "ollama.exe", "/T"], 
+                               creationflags=0x08000000, capture_output=True)
+            else:
+                subprocess.run(["pkill", "-9", "-f", "ollama_llama_server"], capture_output=True)
+                subprocess.run(["pkill", "-9", "-f", "ollama"], capture_output=True)
+        except: pass
+        time.sleep(0.5)
+
     cleanup_gpu()
 
 def cleanup_gpu():
-    """Forces garbage collection and flushes CUDA cache."""
+    """Forces garbage collection and flushes CUDA cache & IPC memory safely without blocking."""
     import gc
     import torch
     gc.collect()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
 def start_ollama():
     """Starts the Ollama server in the background (if not already running)."""
@@ -1232,17 +1287,6 @@ def cleanup_intermediate_files(book_crops_dir: str):
             log_done(f"Nothing to clean: {book_crops_dir}")
     except Exception as e:
         log_warn(f"Cleanup failed for {book_crops_dir}: {e}")
-
-def cleanup_gpu():
-    import signal, psutil
-    try:
-        current = psutil.Process()
-        for child in current.children(recursive=True):
-            try: child.send_signal(signal.SIGTERM)
-            except: pass
-        import torch
-        if torch.cuda.is_available(): torch.cuda.empty_cache()
-    except: pass
 
 # ════════════════════════════════════════════════════
 # MAIN

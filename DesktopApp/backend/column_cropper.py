@@ -736,18 +736,39 @@ YOLO_WEIGHTS  = os.getenv("YOLO_WEIGHTS",  model_manager.MODEL_SOURCES["yolo"]["
 MAX_SIZE      = int(os.getenv("MAX_SIZE",  "2048"))
 
 
+_shared_yolo_model = None
+
+def get_yolo_model():
+    global _shared_yolo_model
+    if _shared_yolo_model is None:
+        from doclayout_yolo import YOLOv10
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _shared_yolo_model = YOLOv10(YOLO_WEIGHTS)
+        _shared_yolo_model.to(device)
+    return _shared_yolo_model
+
+def unload_yolo():
+    global _shared_yolo_model
+    if _shared_yolo_model is not None:
+        try:
+            del _shared_yolo_model
+        except Exception:
+            pass
+        _shared_yolo_model = None
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
 def run_yolo(image_path: str) -> list:
     try:
-        from doclayout_yolo import YOLOv10
-    except ImportError:
-        print("❌ doclayout-yolo not found.")
-        sys.exit(1)
+        model = get_yolo_model()
+    except Exception as e:
+        print(f"❌ doclayout-yolo load error: {e}")
+        return []
 
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    model = YOLOv10(YOLO_WEIGHTS)
-    model.to(device)
     results = model.predict(
         source=image_path, imgsz=1024,
         conf=0.25, iou=0.45, verbose=False, device=device,
@@ -758,12 +779,6 @@ def run_yolo(image_path: str) -> list:
         for box in result.boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             boxes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
-    
-    # Cleanup VRAM immediately to prevent bottleneck for EasyOCR/Ollama
-    del model
-    if device == "cuda":
-        torch.cuda.empty_cache()
-        
     return boxes
 
 

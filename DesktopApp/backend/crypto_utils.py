@@ -42,3 +42,23 @@ class CryptoUtils:
         except Exception as e:
             # Silent fail for lookup iteration
             return None
+
+    @staticmethod
+    def compute_file_sha256(file_path: str) -> str:
+        """
+        Computes SHA-256 hex digest of a file in streaming chunks (memory-safe).
+        Returns 64-character lowercase hex string, or None if file cannot be read.
+        """
+        import os
+        import hashlib
+        if not file_path or not os.path.exists(file_path):
+            return None
+        try:
+            hasher = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                while chunk := f.read(65536):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            print(f"⚠️ Error computing SHA-256 for {file_path}: {e}")
+            return None

@@ -2,6 +2,7 @@ import re
 import os
 from datetime import datetime
 from collections import defaultdict
+from backend.crypto_utils import CryptoUtils
 
 class BookGrouper:
     # Supports underscores, hyphens, and spaces: BookID_001.jpg, BookID-001.jpg, BookID 001.jpg
@@ -76,6 +77,11 @@ class BookGrouper:
                 else:
                     entry.update({"page_number": page_num, "type": "interior"})
                     doc["interior_pages"].append(entry)
+        if doc.get("front_cover") and doc["front_cover"].get("file_path"):
+            c_hash = CryptoUtils.compute_file_sha256(doc["front_cover"]["file_path"])
+            doc["cover_sha256"] = c_hash
+            doc["front_cover"]["sha256"] = c_hash
+
         return doc
 
     def _check_missing(self, page_nums):
