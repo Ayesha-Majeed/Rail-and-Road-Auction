@@ -251,7 +251,7 @@ def group_images_by_book(raw_folder: str) -> dict:
 # STEP 1 — CROP ONE BOOK
 # ════════════════════════════════════════════════════
 
-def crop_book(book_images: list, book_crops_folder: str) -> dict:
+def crop_book(book_images: list, book_crops_folder: str, stop_check=None) -> dict:
     cropper.CROPS_FOLDER = book_crops_folder
     os.makedirs(book_crops_folder, exist_ok=True)
 
@@ -259,6 +259,14 @@ def crop_book(book_images: list, book_crops_folder: str) -> dict:
     total_pages = len(book_images)
     
     for img_path in book_images:
+        if stop_check and stop_check():
+            log("  🛑 Cropping aborted by stop request")
+            try:
+                cropper.unload_yolo()
+            except Exception:
+                pass
+            return {}
+
         stem     = Path(img_path).stem
         page_id  = stem
         img_type = detect_type(page_id, total_pages)
@@ -309,7 +317,7 @@ def crop_book(book_images: list, book_crops_folder: str) -> dict:
 # STEP 2 — OCR ONE BOOK
 # ════════════════════════════════════════════════════
 
-def ocr_book(pages: dict, book_output_folder: str, args, total_pages: int = 0) -> dict:
+def ocr_book(pages: dict, book_output_folder: str, args, total_pages: int = 0, stop_check=None) -> dict:
     import torch
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -322,6 +330,10 @@ def ocr_book(pages: dict, book_output_folder: str, args, total_pages: int = 0) -
 
     total_pages = total_pages or len(pages)
     for i, (page_id, col_files) in enumerate(sorted(pages.items()), 1):
+        if stop_check and stop_check():
+            log("  🛑 OCR aborted by stop request")
+            return None
+
         # Trigger cleanup at start of each page
         cleanup_gpu()
         
@@ -337,6 +349,10 @@ def ocr_book(pages: dict, book_output_folder: str, args, total_pages: int = 0) -
         col_texts = []
 
         for col_name, crop_path in col_files:
+            if stop_check and stop_check():
+                log("  🛑 OCR aborted by stop request")
+                return None
+
             log_progress(f"  {col_name} → EasyOCR")
             
             try:
@@ -1204,12 +1220,31 @@ def save_book_metadata(book_id, title, description, output_folder, edition="", a
     log_info("  ISBN",    metadata.get("isbn", "Not Found"))
 
 
+def abort_active_inference():
+    """Immediately stops any ongoing Ollama runner/llama-server without killing the main ollama daemon."""
+    import platform, subprocess
+    try:
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/IM", "ollama_llama_server.exe", "/T"], 
+                           creationflags=0x08000000, capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "llama-server.exe", "/T"], 
+                           creationflags=0x08000000, capture_output=True)
+        else:
+            subprocess.run(["pkill", "-9", "-f", "llama-server"], capture_output=True)
+            subprocess.run(["pkill", "-9", "-f", "ollama_llama_server"], capture_output=True)
+    except Exception:
+        pass
+
+
 def stop_ollama(force_kill=False):
     """Gracefully unloads all models from VRAM via Ollama API to free GPU memory without killing the server."""
     import requests as _req
     import time
     import platform
     
+    # 0. Immediate runner termination to abort any stuck/active token generation
+    abort_active_inference()
+
     # 1. API Unload (Standard way to free VRAM immediately without restarting server)
     try:
         ps = _req.get("http://localhost:11434/api/ps", timeout=2)
@@ -1233,6 +1268,7 @@ def stop_ollama(force_kill=False):
                 subprocess.run(["taskkill", "/F", "/IM", "ollama.exe", "/T"], 
                                creationflags=0x08000000, capture_output=True)
             else:
+                subprocess.run(["pkill", "-9", "-f", "llama-server"], capture_output=True)
                 subprocess.run(["pkill", "-9", "-f", "ollama_llama_server"], capture_output=True)
                 subprocess.run(["pkill", "-9", "-f", "ollama"], capture_output=True)
         except: pass

@@ -68,6 +68,12 @@ def extract_volume(*texts):
         if m2:
             val = m2.group(1).lower()
             return ROMAN_MAP.get(val, val)
+        # 3. Matches trailing standalone Roman numeral (e.g. "PENNSY POWER II", "PENNSY POWER III")
+        m3 = re.search(r"\b([ivxldcm]+)\s*$", text, re.IGNORECASE)
+        if m3:
+            val = m3.group(1).lower()
+            if val in ROMAN_MAP:
+                return ROMAN_MAP[val]
     return None
 
 def clean_base_title(text):
@@ -81,6 +87,10 @@ def clean_base_title(text):
     cleaned = re.sub(r"[\s,\-\:]+\b(?:volume|vol\.?|v\.|part|pt\.?|book|bk\.?)\s*([0-9ivxldcm]+|[a-z])\b.*$", "", text, flags=re.IGNORECASE)
     # Strip leading volume info if any
     cleaned = re.sub(r"^\b(?:volume|vol\.?|v\.|part|pt\.?|book|bk\.?)\s*([0-9ivxldcm]+|[a-z])[\s,\-\:]+", "", cleaned, flags=re.IGNORECASE)
+    # Strip trailing standalone Roman numeral if it's a known volume number (e.g. " II", " III")
+    m = re.search(r"[\s,\-\:]+\b([ivxldcm]+)\s*$", cleaned, flags=re.IGNORECASE)
+    if m and m.group(1).lower() in ROMAN_MAP:
+        cleaned = re.sub(r"[\s,\-\:]+\b([ivxldcm]+)\s*$", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
 
 def check_same_book_match(new_title, new_isbn, db_title, db_isbn):
@@ -273,7 +283,7 @@ class DBConnector:
             print(f"❌ book_exists error: {e}")
             return False
 
-    def update_book_sync_date(self, collection, doc_id_or_doc):
+    def update_book_sync_date(self, collection, doc_id_or_doc, force=False):
         """
         Updates the sync_date / synced_at timestamp of an existing book document in MongoDB.
         """
@@ -287,24 +297,34 @@ class DBConnector:
             
             query = {}
             if isinstance(doc_id_or_doc, dict):
-                # Avoid redundant network round-trip if book was synced within the last 5 minutes
-                last_s = doc_id_or_doc.get("last_synced") or doc_id_or_doc.get("synced_at")
-                if last_s:
-                    try:
-                        prev_time = datetime.fromisoformat(str(last_s).replace("Z", "")) if "T" in str(last_s) else datetime.strptime(str(last_s), "%Y-%m-%d %H:%M:%S")
-                        if (datetime.now() - prev_time).total_seconds() < 300:
-                            return True
-                    except Exception:
-                        pass
+                # Avoid redundant network round-trip if book was synced within the last 5 minutes (unless forced)
+                if not force:
+                    last_s = doc_id_or_doc.get("last_synced") or doc_id_or_doc.get("synced_at")
+                    if last_s:
+                        try:
+                            prev_time = datetime.fromisoformat(str(last_s).replace("Z", "")) if "T" in str(last_s) else datetime.strptime(str(last_s), "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - prev_time).total_seconds() < 300:
+                                return True
+                        except Exception:
+                            pass
 
                 if "_id" in doc_id_or_doc:
-                    query = {"_id": doc_id_or_doc["_id"]}
+                    from bson.objectid import ObjectId
+                    oid = doc_id_or_doc["_id"]
+                    if ObjectId.is_valid(str(oid)) and not isinstance(oid, ObjectId):
+                        query = {"_id": ObjectId(str(oid))}
+                    else:
+                        query = {"_id": oid}
                 elif "book_id" in doc_id_or_doc:
                     query = {"book_id": doc_id_or_doc["book_id"]}
                 elif "title" in doc_id_or_doc:
                     query = {"title": doc_id_or_doc["title"]}
             else:
-                query = {"_id": doc_id_or_doc}
+                from bson.objectid import ObjectId
+                if ObjectId.is_valid(str(doc_id_or_doc)):
+                    query = {"_id": ObjectId(str(doc_id_or_doc))}
+                else:
+                    query = {"_id": doc_id_or_doc}
 
             if not query:
                 return False
@@ -415,6 +435,15 @@ class DBConnector:
                     query_user_ids.append(ObjectId(str(user_id)))
                 query["user_id"] = {"$in": query_user_ids}
 
+            # If new_book_id is provided, check for title/ISBN duplicates ONLY within the same lot / book_id!
+            # A new lot ID must never be skipped or matched against other lots in DB.
+            if new_book_id is not None:
+                bid_str = str(new_book_id).strip()
+                bids = [bid_str]
+                if bid_str.isdigit():
+                    bids.append(int(bid_str))
+                query["book_id"] = {"$in": bids}
+
             # Fetch relevant fields for duplicate/volume/ISBN comparison
             projection = None if (return_doc or update_sync_date) else {
                 "title": 1, "subtitle": 1, "edition": 1, "isbn": 1, "book_id": 1, "user_id": 1
@@ -424,6 +453,10 @@ class DBConnector:
                 return list(self.db[collection].find(query, projection))
 
             books = self._execute_with_retry(_fetch_books, op_name="fetch titles for duplicate check")
+            if not books and new_book_id is not None:
+                print(f"   ℹ️ Lot '{new_book_id}' is not in DB. Proceeding as new book.")
+                return None if return_doc else False
+
             from thefuzz import fuzz
 
             new_base = clean_base_title(new_title)
@@ -599,7 +632,7 @@ class DBConnector:
             return str(result.inserted_id)
         return self._execute_with_retry(_insert, op_name=f"insert_book into {collection}")
 
-    def find_by_cover_hash(self, collection, cover_hash, user_id=None, book_id=None):
+    def find_by_cover_hash(self, collection, cover_hash, user_id=None, book_id=None, update_sync_date=False):
         """
         Fast O(1) lookup of a book by its front cover SHA-256 hash.
         Returns: document dict if found, else None
@@ -608,6 +641,12 @@ class DBConnector:
             return None
         def _find():
             query = {"cover_sha256": str(cover_hash).strip()}
+            if book_id is not None:
+                bid_str = str(book_id).strip()
+                bids = [bid_str]
+                if bid_str.isdigit():
+                    bids.append(int(bid_str))
+                query["book_id"] = {"$in": bids}
             if user_id:
                 from bson.objectid import ObjectId
                 uids = [str(user_id)]
@@ -615,13 +654,10 @@ class DBConnector:
                     uids.append(ObjectId(str(user_id)))
                 query["user_id"] = {"$in": uids}
 
-            # If book_id is provided, prioritize matching exact book_id first
-            if book_id is not None:
-                exact = self.db[collection].find_one({**query, "book_id": str(book_id).strip()})
-                if exact:
-                    return exact
-
-            return self.db[collection].find_one(query)
+            doc = self.db[collection].find_one(query)
+            if doc and update_sync_date:
+                self.update_book_sync_date(collection, doc, force=True)
+            return doc
 
         return self._execute_with_retry(_find, op_name="find_by_cover_hash")
 
