@@ -28,18 +28,26 @@ jobs:
       run: |
         pip install --no-cache-dir --use-pep517 --prefer-binary -r DesktopApp/requirements.txt pyinstaller
     
-    - name: Create default config
+    - name: Create default config and .env
+      env:
+        MONGO_URI: ${{ secrets.MONGO_URI }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        COLLECTION: ${{ secrets.COLLECTION }}
+        GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
       run: |
-        echo '{"mongo_uri":"${{ secrets.MONGO_URI || "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" }}","db_name":"${{ secrets.DB_NAME || "Test" }}","collection":"${{ secrets.COLLECTION || "Book Data" }}","watch_mode":false,"interval":30}' > DesktopApp/sync_config.json
-    
-    - name: Create .env for build
-      run: |
-        echo "MONGO_URI=${{ secrets.MONGO_URI || "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" }}" > DesktopApp/.env
-        echo "DB_NAME=${{ secrets.DB_NAME || "Test" }}" >> DesktopApp/.env
-        echo "COLLECTION=${{ secrets.COLLECTION || "Book Data" }}" >> DesktopApp/.env
-        echo "GOOGLE_BOOKS_API_KEY=${{ secrets.GOOGLE_BOOKS_API_KEY || "AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" }}" >> DesktopApp/.env
-        echo "VISION_MODEL=minicpm-v:latest" >> DesktopApp/.env
-        echo "TEXT_MODEL=llama3.2:1b" >> DesktopApp/.env
+        $mongo = if ($env:MONGO_URI) { $env:MONGO_URI } else { "mongodb+srv://mlbenchpvtltd:HDqDr62jK1vK50x9@cluster0.pdhd1qx.mongodb.net/Test" }
+        $db = if ($env:DB_NAME) { $env:DB_NAME } else { "Test" }
+        $coll = if ($env:COLLECTION) { $env:COLLECTION } else { "Book Data" }
+        $gkey = if ($env:GOOGLE_BOOKS_API_KEY) { $env:GOOGLE_BOOKS_API_KEY } else { "AIzaSyCbMpGA8FnOH2idwhsQ_UtDQ7BeqMEtB-0" }
+
+        Set-Content -Path "DesktopApp/sync_config.json" -Value "{`"mongo_uri`":`"$mongo`",`"db_name`":`"$db`",`"collection`":`"$coll`",`"watch_mode`":false,`"interval`":30}"
+        
+        "MONGO_URI=$mongo" | Out-File -Encoding ascii DesktopApp/.env
+        "DB_NAME=$db" | Out-File -Encoding ascii -Append DesktopApp/.env
+        "COLLECTION=$coll" | Out-File -Encoding ascii -Append DesktopApp/.env
+        "GOOGLE_BOOKS_API_KEY=$gkey" | Out-File -Encoding ascii -Append DesktopApp/.env
+        "VISION_MODEL=minicpm-v:latest" | Out-File -Encoding ascii -Append DesktopApp/.env
+        "TEXT_MODEL=llama3.2:1b" | Out-File -Encoding ascii -Append DesktopApp/.env
     
     - name: Build EXE
       run: |
