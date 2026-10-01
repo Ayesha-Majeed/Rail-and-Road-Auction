@@ -72,8 +72,17 @@ class ModernMessageBox:
         px = getattr(self.app, "_px", lambda x: x)
         fs = getattr(self.app, "F", {}).get("label", 14)
         
-        # Medium size window
-        w, h = px(350), px(120)
+        # Dynamic size: calculate height based on message content
+        w = px(400)
+        line_count = message.count("\n") + 1
+        # Estimate wrapped lines: ~45 chars per line at typical font size
+        for line in message.split("\n"):
+            if len(line) > 45:
+                line_count += len(line) // 45
+        # Base padding (title bar + button area + margins) + per-line height
+        h_base = px(100)  # buttons + padding
+        h_text = line_count * px(22)  # per line of text
+        h = max(px(160), min(h_base + h_text, px(450)))  # min 160, max 450
         
         # Center on app
         if hasattr(target_app, "winfo_x"):
@@ -92,10 +101,10 @@ class ModernMessageBox:
         btn_hover = red_hover if mtype == "error" else olive_hover
         
         frame = ctk.CTkFrame(top, fg_color=bg_color, corner_radius=0)
-        frame.pack(fill="both", expand=True, padx=px(20), pady=px(20))
+        frame.pack(fill="both", expand=True, padx=px(20), pady=px(15))
         
-        lbl = ctk.CTkLabel(frame, text=message, font=ctk.CTkFont("Inter", size=fs), text_color=text_color, wraplength=w - px(40))
-        lbl.pack(expand=True, fill="both", pady=(0, px(20)))
+        lbl = ctk.CTkLabel(frame, text=message, font=ctk.CTkFont("Inter", size=fs), text_color=text_color, wraplength=w - px(50), justify="left")
+        lbl.pack(expand=True, fill="both", pady=(0, px(15)))
         
         result = [False]
         def _close(res):
@@ -219,6 +228,7 @@ STATUS_STYLES = {
     "Processing": (C["s_p_bg"],    C["s_p_fg"]),
     "Skipped":    (C["s_skip_bg"], C["s_skip_fg"]),
     "Failed":     (C["s_fail_bg"], C["s_fail_fg"]),
+    "Stopped":    (C["s_fail_bg"], C["s_fail_fg"]),
 }
 
 class ImagePreviewWindow(ctk.CTkToplevel):
@@ -1132,6 +1142,7 @@ class SyncApp(ctk.CTk):
         # State
         self.db_connector  = None
         self.sync_running  = False
+        self._current_processing_book = None
         self.log_queue     = queue.Queue()
         self.total_ok      = 0
         self.total_skip    = 0
@@ -1143,7 +1154,8 @@ class SyncApp(ctk.CTk):
         self._folder_selected_session = False
         self.current_user = None
         self._session_token = None # Persistent ONLY within this session (Memory-only)
-        self.last_sync_results = {} # book_id -> pages list
+        self.last_sync_results = {} # book_id -> pages list or dict
+        self.book_mongo_ids = {}    # book_id -> MongoDB _id string for accurate 1-to-1 extraction
 
         self._load_config()
         self._build_ui()
@@ -1156,7 +1168,10 @@ class SyncApp(ctk.CTk):
 
         # Connect ocr_pipeline logs to our UI activity log
         try:
-            import main_mineru_ocr as ocr_pipeline
+            try:
+                import backend.main_mineru_ocr as ocr_pipeline
+            except ImportError:
+                import main_mineru_ocr as ocr_pipeline
             ocr_pipeline.LOG_CALLBACK = self._log
         except Exception as e:
             self._log(f"⚠️ Could not hook OCR logs: {e}")
@@ -1418,6 +1433,9 @@ class SyncApp(ctk.CTk):
 
     # ─── Build UI ─────────────────────────────────────────────────────────────
     def _open_add_new_class(self):
+        if self.sync_running:
+            messagebox.showwarning("Sync in Progress", "A sync process is currently running. Please wait for it to finish or click Stop (⏹).")
+            return
         if not self.current_user:
             messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before proceeding.")
             return
@@ -1611,10 +1629,20 @@ class SyncApp(ctk.CTk):
     def _on_health_check_start_done(self, ok, msg, missing):
         if not self.winfo_exists(): return
         if not ok:
-            if any(m == "yolo" or m.startswith("ollama:") for m in missing):
+            # Build a user-friendly list of missing models
+            ollama_missing = [m.replace("ollama:", "") for m in missing if m.startswith("ollama:")]
+            yolo_missing = "yolo" in missing
+            
+            model_list = "\n".join(f"  • {m}" for m in ollama_missing)
+            if yolo_missing:
+                model_list += "\n  • YOLO detection weights"
+            
+            if ollama_missing or yolo_missing:
                 ans = messagebox.askyesno("AI Models Missing", 
-                                        f"Some AI models are missing:\n\n{msg}\n\n"
-                                        "Would you like to download/pull them now?")
+                    f"The following AI models need to be downloaded:\n\n"
+                    f"{model_list}\n\n"
+                    f"📥 Click 'Yes' to download them now automatically.\n"
+                    f"(This may take a few minutes depending on your internet speed)")
                 if ans:
                     self._show_model_downloader()
             else:
@@ -1759,7 +1787,7 @@ class SyncApp(ctk.CTk):
         upload_pair.grid_columnconfigure(1, weight=1, uniform="up")
         upload_pair.grid_rowconfigure(0, weight=1)
 
-        self._build_upload_card(upload_pair, col=0,
+        self.card_upload_slides = self._build_upload_card(upload_pair, col=0,
                                 title="Upload Slides",
                                 desc="Automatically analyze your scanned slides with AI to extract colors, logos, text, and catalog-ready details.",
                                 bg="#8C7B5D", title_color="#FFFFFF", desc_color="#E5E5E5",
@@ -1769,7 +1797,7 @@ class SyncApp(ctk.CTk):
                                 width=None, height=None, border_color="#E4E7EC",
                                 title_size=17, desc_size=14, wrap=218, icon_pady=(0, self._px(48)),
                                 icon_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "upload_icon.png"))
-        self._build_upload_card(upload_pair, col=1,
+        self.card_upload_books = self._build_upload_card(upload_pair, col=1,
                                 title="Upload Books",
                                 desc="Process book cover images to identify titles, authors, and generate complete auction-ready descriptions.",
                                 bg="#F5F2EC", title_color="#090909", desc_color="#808080",
@@ -1783,34 +1811,34 @@ class SyncApp(ctk.CTk):
         # Row 1 of cards: All three buttons aligned
         cards.grid_rowconfigure(1, weight=0)
 
-        new_slide_btn = ctk.CTkButton(cards, text="Add a new slide class in model",
+        self.btn_new_slide = ctk.CTkButton(cards, text="Add a new slide class in model",
                               height=55, corner_radius=12,
                               font=ctk.CTkFont(family="Inter", size=self._fs(9), weight="normal"),
                               fg_color="transparent", border_width=2, border_color="#8C7B5D",
                               text_color="#8C7B5D", hover_color="#F5F2EC",
                               command=self._open_add_new_class)
-        new_slide_btn.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(12, 0))
+        self.btn_new_slide.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(12, 0))
 
         manual_buttons_frame = ctk.CTkFrame(cards, fg_color=C["bg"])
         manual_buttons_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 0), pady=0)
         manual_buttons_frame.grid_columnconfigure(0, weight=1, uniform="up")
         manual_buttons_frame.grid_columnconfigure(1, weight=1, uniform="up")
 
-        m_slides_btn = ctk.CTkButton(manual_buttons_frame, text="Process Single Lot of Slides",
+        self.btn_manual_slides = ctk.CTkButton(manual_buttons_frame, text="Process Single Lot of Slides",
                               height=55, corner_radius=12,
                               font=ctk.CTkFont(family="Inter", size=self._fs(9), weight="normal"),
                               fg_color="transparent", border_width=2, border_color="#8C7B5D",
                               text_color="#8C7B5D", hover_color="#F5F2EC",
                               command=lambda: self._open_train_slides_app(mode="files"))
-        m_slides_btn.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 0))
+        self.btn_manual_slides.grid(row=0, column=0, sticky="ew", padx=8, pady=(12, 0))
 
-        m_books_btn = ctk.CTkButton(manual_buttons_frame, text="Process Single Book Files",
+        self.btn_manual_books = ctk.CTkButton(manual_buttons_frame, text="Process Single Book Files",
                               height=55, corner_radius=12,
                               font=ctk.CTkFont(family="Inter", size=self._fs(9), weight="normal"),
                               fg_color="transparent", border_width=2, border_color="#8C7B5D",
                               text_color="#8C7B5D", hover_color="#F5F2EC",
                               command=lambda: self._browse_manual("books"))
-        m_books_btn.grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 0))
+        self.btn_manual_books.grid(row=0, column=1, sticky="ew", padx=8, pady=(12, 0))
         
         # Recent Activity on Row 2 of self.scroll
         self._build_activity_section()
@@ -1915,6 +1943,9 @@ class SyncApp(ctk.CTk):
             cmd = lambda: None # Disable command
 
         def _cb(_e=None):
+            if not getattr(card, "_is_enabled", True) or self.sync_running:
+                messagebox.showwarning("Sync in Progress", "A sync process is currently running. Please wait for it to finish or click Stop (⏹).")
+                return
             try:
                 cmd()
             except Exception:
@@ -1994,7 +2025,15 @@ class SyncApp(ctk.CTk):
             except Exception:
                 pass
         cf.bind("<Configure>", _update_wrap, add="+")
-        _update_wrap()
+        card._is_enabled = active
+        card._default_bg = bg
+        card._default_border = border_color or C["border"]
+        card._title_lbl = _title_lbl
+        card._desc_lbl = _desc_lbl
+        card._icon_box = icon_box
+        card._default_title_color = title_color
+        card._default_desc_color = desc_color
+        card._default_icon_bg = icon_bg
 
         def _bind_all(w):
             try:
@@ -2005,6 +2044,7 @@ class SyncApp(ctk.CTk):
             for ch in getattr(w, "winfo_children", lambda: [])():
                 _bind_all(ch)
         _bind_all(card)
+        return card
 
     # ── Recent Activity ────────────────────────────────────────────────────────
     def _build_activity_section(self):
@@ -2064,7 +2104,7 @@ class SyncApp(ctk.CTk):
         self.log_box.configure(state="disabled")
         self.log_visible = False
 
-    def _add_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
+    def _add_activity_row(self, book_id, status, type_, timestamp, error_msg=None, mongo_id=None):
         """Add a new row to the activity table — optimized for performance."""
         bg, fg = STATUS_STYLES.get(status, (C["s_o_bg"], C["s_o_fg"]))
 
@@ -2130,10 +2170,16 @@ class SyncApp(ctk.CTk):
                 _bind_mouse_wheel(child)
         _bind_mouse_wheel(row)
 
+        if mongo_id:
+            if not hasattr(self, "book_mongo_ids"):
+                self.book_mongo_ids = {}
+            self.book_mongo_ids[book_id] = str(mongo_id)
+
         # Store error message in row metadata
         self.activity_rows[book_id] = {
             "row": row, "badge": badge, "type_lbl": type_lbl, 
-            "time_lbl": time_lbl, "error_msg": error_msg
+            "time_lbl": time_lbl, "error_msg": error_msg,
+            "mongo_id": str(mongo_id) if mongo_id else None
         }
         self.row_order.append(book_id)
 
@@ -2933,7 +2979,10 @@ class SyncApp(ctk.CTk):
                                                 coll = self.config.get("collection", "Book Data")
                                                 update_fields = {"title": val}
                                                 if sub_entry: update_fields["subtitle"] = s_val
-                                                self.db_connector.db[coll].update_one({"book_id": book_id}, {"$set": update_fields})
+                                                if doc and "_id" in doc:
+                                                    self.db_connector.db[coll].update_one({"_id": doc["_id"]}, {"$set": update_fields})
+                                                else:
+                                                    self.db_connector.db[coll].update_one({"book_id": book_id}, {"$set": update_fields})
                                                 self._log(f"✅ Title/Subtitle updated for {book_id}")
                                             except Exception as err: self._log(f"❌ DB Update Error: {err}")
                                         edit_win.destroy()
@@ -3487,22 +3536,82 @@ class SyncApp(ctk.CTk):
                     except Exception:
                         pass
 
-                # --- Fix 10: Non-blocking Open ---
+                # --- Fix 10: Non-blocking Open with MongoDB _id Lookup ---
                 def _fetch_and_open():
                     # Set waiting cursor
                     self.after(0, lambda: self.configure(cursor="watch"))
                     
                     try:
-                        doc = self.db_connector.db[coll].find_one({"book_id": book_id}) if (self.db_connector and self.db_connector.connected) else None
-                        
-                        # Fallback to in-memory cached doc if it was skipped (duplicate)
-                        if not doc and book_id in self.last_sync_results:
+                        doc = None
+                        if book_id in self.last_sync_results:
                             cached = self.last_sync_results[book_id]
-                            if isinstance(cached, dict) and "doc" in cached:
+                            if isinstance(cached, dict) and "doc" in cached and isinstance(cached["doc"], dict):
                                 doc = cached["doc"]
+                        
+                        # Extract MongoDB _id
+                        mongo_id = None
+                        if isinstance(doc, dict) and "_id" in doc:
+                            mongo_id = str(doc["_id"])
+                        if not mongo_id and hasattr(self, "book_mongo_ids"):
+                            mongo_id = self.book_mongo_ids.get(book_id)
+                        if not mongo_id and book_id in self.activity_rows:
+                            mongo_id = self.activity_rows[book_id].get("mongo_id")
+
+                        if self.db_connector and self.db_connector.connected:
+                            from bson.objectid import ObjectId
+                            
+                            # 1. Fetch by MongoDB _id (Exact 1-to-1 match without duplicate collisions)
+                            if mongo_id:
+                                try:
+                                    m_qid = ObjectId(str(mongo_id)) if ObjectId.is_valid(str(mongo_id)) else str(mongo_id)
+                                    db_doc = self.db_connector.db[coll].find_one({"_id": m_qid})
+                                    if db_doc:
+                                        doc = db_doc
+                                except Exception as err:
+                                    self._log(f"  ⚠️ Fetch by mongo_id failed: {err}")
+
+                            # 2. If not found by _id, check local front cover SHA-256 hash match
+                            if not doc:
+                                local_pages = None
+                                if book_id in self.last_sync_results:
+                                    cached = self.last_sync_results[book_id]
+                                    if isinstance(cached, list):
+                                        local_pages = cached
+                                    elif isinstance(cached, dict) and "files" in cached:
+                                        local_pages = cached["files"]
                                 
+                                if local_pages:
+                                    front_p = next((fp for pn, fp in local_pages if pn == 1), local_pages[0][1] if local_pages else None)
+                                    if front_p and os.path.exists(front_p):
+                                        try:
+                                            c_hash = CryptoUtils.compute_file_sha256(front_p)
+                                            uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                                            db_doc = self.db_connector.find_by_cover_hash(coll, c_hash, user_id=uid, book_id=book_id)
+                                            if db_doc:
+                                                doc = db_doc
+                                                if "_id" in doc:
+                                                    self.book_mongo_ids[book_id] = str(doc["_id"])
+                                                    if book_id in self.activity_rows:
+                                                        self.activity_rows[book_id]["mongo_id"] = str(doc["_id"])
+                                        except Exception:
+                                            pass
+
+                            # 3. Fallback: query by book_id + user_id, sorted by newest (_id: -1)
+                            if not doc:
+                                uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                                query = {"book_id": str(book_id).strip()}
+                                if uid:
+                                    uids = [str(uid)]
+                                    if ObjectId.is_valid(str(uid)):
+                                        uids.append(ObjectId(str(uid)))
+                                    query["user_id"] = {"$in": uids}
+                                doc = self.db_connector.db[coll].find_one(query, sort=[("_id", -1)])
+                                if doc and "_id" in doc:
+                                    self.book_mongo_ids[book_id] = str(doc["_id"])
+
                         self.after(0, lambda: _create_window(doc))
-                    except Exception:
+                    except Exception as e:
+                        self._log(f"❌ Error opening detail: {e}")
                         self.after(0, lambda: _create_window(None))
                     finally:
                         self.after(0, lambda: self.configure(cursor=""))
@@ -3530,11 +3639,16 @@ class SyncApp(ctk.CTk):
         self.row_order.append(book_id)
         return widgets
 
-    def update_activity_row(self, book_id, status, type_, timestamp, error_msg=None):
+    def update_activity_row(self, book_id, status, type_, timestamp, error_msg=None, mongo_id=None):
         """Update existing row or create new one. Called from main thread via after()."""
         if not book_id: return
         
         bg, fg = STATUS_STYLES.get(status, (C["s_o_bg"], C["s_o_fg"]))
+
+        if mongo_id:
+            if not hasattr(self, "book_mongo_ids"):
+                self.book_mongo_ids = {}
+            self.book_mongo_ids[book_id] = str(mongo_id)
 
         if book_id in self.activity_rows:
             w = self.activity_rows[book_id]
@@ -3543,10 +3657,12 @@ class SyncApp(ctk.CTk):
             w["type_lbl"].configure(text=type_)
             if error_msg:
                 w["error_msg"] = error_msg
+            if mongo_id:
+                w["mongo_id"] = str(mongo_id)
         elif book_id not in self._pending_ids:
             # Mark as pending to prevent duplicate rows from rapid updates
             self._pending_ids.add(book_id)
-            self._add_activity_row(book_id, status, type_, timestamp, error_msg=error_msg)
+            self._add_activity_row(book_id, status, type_, timestamp, error_msg=error_msg, mongo_id=mongo_id)
             # Remove from pending after creation (it's now in activity_rows)
             self._pending_ids.discard(book_id)
 
@@ -3563,6 +3679,7 @@ class SyncApp(ctk.CTk):
         self.activity_rows = {}
         self.row_order = []
         self._pending_ids = set()
+        self.book_mongo_ids = {}
         
         # 3. Reset session counters
         self.total_ok = 0
@@ -3729,6 +3846,9 @@ class SyncApp(ctk.CTk):
 
     # ── Actions ────────────────────────────────────────────────────────────────
     def _browse_manual(self, mode="books"):
+        if self.sync_running:
+            messagebox.showwarning("Sync in Progress", "A sync process is currently running. Please wait for it to finish or click Stop (⏹).")
+            return
         if not self.current_user:
             messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before uploading.")
             return
@@ -3786,12 +3906,16 @@ class SyncApp(ctk.CTk):
         def _check_and_start_manual():
             self.sync_running = True
             self.after(0, lambda: self.btn_stop.configure(state="normal"))
+            self.after(0, lambda: self._set_action_buttons_state("disabled", active_mode="books"))
             self._log("🚀 Manual Sync started!")
             threading.Thread(target=self._manual_worker, args=(groups,), daemon=True).start()
 
         threading.Thread(target=_check_and_start_manual, daemon=True).start()
 
     def _open_train_slides_app(self, mode="folder"):
+        if self.sync_running:
+            messagebox.showwarning("Sync in Progress", "A sync process is currently running. Please wait for it to finish or click Stop (⏹).")
+            return
         if not self.current_user:
             messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before proceeding.")
             return
@@ -3900,6 +4024,7 @@ class SyncApp(ctk.CTk):
         def _bg_process_all():
             self.sync_running = True
             self.after(0, lambda: self.btn_stop.configure(state="normal"))
+            self.after(0, lambda: self._set_action_buttons_state("disabled", active_mode="slides"))
             self._log("🚀 Train Slides sync started!")
             
             # Force unload Ollama models from VRAM to make room for PyTorch
@@ -3924,6 +4049,7 @@ class SyncApp(ctk.CTk):
                     self.after(0, lambda l=lid, err=err_str: self.update_activity_row(l, "Failed", "Train Lot", ts, error_msg=err))
                 self.sync_running = False
                 self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+                self.after(0, lambda: self._set_action_buttons_state("normal"))
                 return
 
             # --- PHASE 1: Process all lots with PyTorch models ---
@@ -4188,6 +4314,8 @@ class SyncApp(ctk.CTk):
 
             self.sync_running = False
             self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+            self.after(0, lambda: self._set_action_buttons_state("normal"))
+            self.after(0, lambda: self._set_conn_visual("active"))
             self._log("⏹ Train Slides sync finished or stopped.")
 
         threading.Thread(target=_bg_process_all, daemon=True).start()
@@ -4205,14 +4333,22 @@ class SyncApp(ctk.CTk):
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 # Reuse the core processing logic
                 self._process_single_book_flow(book_id, books[book_id], ts)
+                self._current_processing_book = None
+                if not self.sync_running: break
             
             self._log("✅ Manual sync complete.")
         finally:
             self.sync_running = False
+            self._current_processing_book = None
             self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+            self.after(0, lambda: self._set_action_buttons_state("normal"))
+            self.after(0, lambda: self._set_conn_visual("active"))
 
     def _process_single_book_flow(self, book_id, book_pages, ts):
         """The core logic to process one book from start to finish."""
+        if not self.sync_running:
+            return
+        self._current_processing_book = book_id
         coll = self.config.get("collection", "Book Data")
         
         # Save to last_sync_results immediately so local paths are available even if skipped
@@ -4239,24 +4375,49 @@ class SyncApp(ctk.CTk):
         if OCR_AVAILABLE:
             try:
                 ai_result = self._process_book_ocr(book_id, book_pages, ts)
+                if not self.sync_running or (ai_result and ai_result.get("cancelled")):
+                    self._log(f"  🛑 Aborted processing for {book_id}. Skipping database upload.")
+                    self.after(0, lambda b=book_id, t=ts:
+                               self.update_activity_row(b, "Stopped", "Stopped", t, error_msg="Stopped by user"))
+                    return
                 if ai_result:
                     if ai_result.get("duplicate"):
-                        if "doc" in ai_result:
-                            self.last_sync_results[book_id] = {"files": book_pages, "doc": ai_result["doc"]}
-                        self.after(0, lambda: self.update_activity_row(book_id, "Skipped", "Book", ts))
+                        matched_doc = ai_result.get("doc")
+                        mongo_id = str(matched_doc.get("_id")) if (matched_doc and "_id" in matched_doc) else None
+                        if mongo_id:
+                            self.book_mongo_ids[book_id] = mongo_id
+                        if matched_doc:
+                            self.last_sync_results[book_id] = {"files": book_pages, "doc": matched_doc, "mongo_id": mongo_id}
+                        self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                   self.update_activity_row(b, "Skipped", "Book", t, mongo_id=mid))
                         return
                         
                     extracted_title = ai_result.get("title", "")
                     
                     # 3. DB Check (Title matching) AFTER OCR
                     try:
-                        if extracted_title:
-                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True)
+                            uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                            matched_doc = self.db_connector.book_title_exists(
+                                coll, extracted_title,
+                                new_book_id=book_id,
+                                new_isbn=ai_result.get("isbn") if ai_result else None,
+                                new_edition=ai_result.get("edition") if ai_result else None,
+                                new_subtitle=ai_result.get("subtitle") if ai_result else None,
+                                user_id=uid,
+                                return_doc=True
+                            )
                             if matched_doc:
-                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping.")
-                                # Save the matched DB document to memory so the preview page can display it!
-                                self.last_sync_results[book_id] = {"files": book_pages, "doc": matched_doc}
-                                self.after(0, lambda: self.update_activity_row(book_id, "Skipped", "Book", ts))
+                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping (Date Updated).")
+                                try:
+                                    self.db_connector.update_book_sync_date(coll, matched_doc, force=True)
+                                except Exception:
+                                    pass
+                                mongo_id = str(matched_doc.get("_id")) if "_id" in matched_doc else None
+                                if mongo_id:
+                                    self.book_mongo_ids[book_id] = mongo_id
+                                self.last_sync_results[book_id] = {"files": book_pages, "doc": matched_doc, "mongo_id": mongo_id}
+                                self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                           self.update_activity_row(b, "Skipped", "Book", t, mongo_id=mid))
                                 return
                     except Exception as e:
                         self._log(f"  ⚠️ DB title check error: {e}")
@@ -4275,20 +4436,29 @@ class SyncApp(ctk.CTk):
                     doc["ocr_completed"] = False
                     self._log(f"  ⚠️ OCR returned no results for {book_id}")
             except Exception as e:
+                if not self.sync_running:
+                    return
                 doc["ocr_completed"] = False
                 self._log(f"  ⚠️ OCR pipeline error: {e}")
         else:
             self.after(0, lambda: self.update_activity_row(book_id, "Failed", "No Models", ts))
             return
 
+        if not self.sync_running or (ai_result and ai_result.get("cancelled")):
+            return
+
         # 4. Insert to DB
         if ai_result:
             try:
-                self.db_connector.insert_book(coll, doc)
+                inserted_id = self.db_connector.insert_book(coll, doc)
+                mongo_id = str(inserted_id) if inserted_id else None
+                if mongo_id:
+                    doc["_id"] = inserted_id
+                    self.book_mongo_ids[book_id] = mongo_id
+                self.last_sync_results[book_id] = {"files": book_pages, "doc": doc, "mongo_id": mongo_id}
                 self._log(f"  ✅ Synced: {book_id}")
-                # Save to last_sync_results so it can be opened on click
-                self.last_sync_results[book_id] = book_pages
-                self.after(0, lambda: self.update_activity_row(book_id, "Complete", "Book", ts))
+                self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                           self.update_activity_row(b, "Complete", "Book", t, mongo_id=mid))
             except Exception as e:
                 self._log(f"  ❌ DB Error: {e}")
                 self.after(0, lambda: self.update_activity_row(book_id, "Failed", "DB Error", ts))
@@ -4296,6 +4466,9 @@ class SyncApp(ctk.CTk):
             self.after(0, lambda: self.update_activity_row(book_id, "Partial", "OCR Fail", ts))
 
     def _browse_folder(self, mode="books"):
+        if self.sync_running:
+            messagebox.showwarning("Sync in Progress", "A sync process is currently running. Please wait for it to finish or click Stop (⏹).")
+            return
         if not self.current_user:
             messagebox.showwarning("Authorization Required", "Please enter a valid token to authorize before uploading.")
             return
@@ -4468,36 +4641,134 @@ class SyncApp(ctk.CTk):
                 # Use 'active' instead of 'connected' which is not a valid state
                 self.after(0, lambda: self._set_conn_visual("active"))
                 self._log("⚠️ Warning: Ollama server not responding. AI extraction might fail.")
-                if not messagebox.askyesno("Ollama Missing", 
-                    "Ollama is either not installed or not running.\n"
-                    "AI extraction (Title, Color, Description) will fail.\n\n"
-                    "Continue anyway?"):
-                    return
-                self.after(0, _proceed_to_sync)
+                # Must show dialog on main thread — Tkinter is not thread-safe
+                def _ask_user():
+                    if messagebox.askyesno("Ollama Missing", 
+                        "Ollama is either not installed or not running.\n"
+                        "AI extraction (Title, Color, Description) will fail.\n\n"
+                        "Continue anyway?"):
+                        _proceed_to_sync()
+                self.after(0, _ask_user)
+                return
 
         def _proceed_to_sync():
             self._set_conn_visual("active")
             self.total_ok = self.total_skip = self.total_fail = 0
             self.sync_running = True
             self.btn_stop.configure(state="normal") # Enable stop button
+            self.after(0, lambda: self._set_action_buttons_state("disabled", active_mode="books"))
             self._log("🚀 Sync started!")
             threading.Thread(target=self._worker, daemon=True).start()
 
         threading.Thread(target=_check_ollama_and_start, daemon=True).start()
 
+    def _set_card_enabled(self, card, enabled):
+        """Visually and behaviorally enable or disable an upload card."""
+        if not card: return
+        card._is_enabled = enabled
+        cur = "hand2" if enabled else "arrow"
+        def _apply_cur(w):
+            try:
+                w.configure(cursor=cur)
+            except Exception:
+                pass
+            for ch in getattr(w, "winfo_children", lambda: [])():
+                _apply_cur(ch)
+        _apply_cur(card)
+
+        if hasattr(card, "_default_bg"):
+            if enabled:
+                card.configure(fg_color=card._default_bg, border_color=card._default_border)
+                if getattr(card, "_title_lbl", None):
+                    card._title_lbl.configure(text_color=card._default_title_color)
+                if getattr(card, "_desc_lbl", None):
+                    card._desc_lbl.configure(text_color=card._default_desc_color)
+                if getattr(card, "_icon_box", None):
+                    card._icon_box.configure(fg_color=card._default_icon_bg)
+            else:
+                card.configure(fg_color="#F3F4F6", border_color="#E5E7EB")
+                if getattr(card, "_title_lbl", None):
+                    card._title_lbl.configure(text_color="#9CA3AF")
+                if getattr(card, "_desc_lbl", None):
+                    card._desc_lbl.configure(text_color="#9CA3AF")
+                if getattr(card, "_icon_box", None):
+                    card._icon_box.configure(fg_color="#E5E7EB")
+
+    def _set_action_buttons_state(self, state, active_mode=None):
+        """Enable ('normal') or disable ('disabled') action buttons and upload cards during active sync/processing."""
+        buttons = [
+            getattr(self, "btn_settings", None),
+            getattr(self, "btn_refresh", None),
+            getattr(self, "btn_new_slide", None),
+            getattr(self, "btn_manual_slides", None),
+            getattr(self, "btn_manual_books", None),
+            getattr(self, "btn_token", None)
+        ]
+        for btn in buttons:
+            if btn and hasattr(btn, "configure"):
+                try:
+                    btn.configure(state=state)
+                except Exception:
+                    pass
+
+        card_slides = getattr(self, "card_upload_slides", None)
+        card_books = getattr(self, "card_upload_books", None)
+
+        if state == "disabled":
+            if active_mode == "books":
+                self._set_card_enabled(card_slides, False)
+                self._set_card_enabled(card_books, False)
+            elif active_mode == "slides":
+                self._set_card_enabled(card_books, False)
+                self._set_card_enabled(card_slides, False)
+            else:
+                self._set_card_enabled(card_slides, False)
+                self._set_card_enabled(card_books, False)
+        else:
+            self._set_card_enabled(card_slides, True)
+            self._set_card_enabled(card_books, True)
+
     def _stop_sync(self):
-        """Request graceful termination of the sync process."""
+        """Request immediate termination of the sync process."""
         if self.sync_running:
-            self._log("🛑 Stop requested. Finishing current book and exiting...")
+            self._log("🛑 Stop requested. Aborting active processing immediately...")
             self.sync_running = False
             self.btn_stop.configure(state="disabled")
+            
+            # Immediately mark currently processing book as Stopped in UI table
+            curr_b = getattr(self, "_current_processing_book", None)
+            if curr_b:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.after(0, lambda b=curr_b, t=ts: self.update_activity_row(b, "Stopped", "Stopped", t, error_msg="Stopped by user"))
+
+            # Abort active inference & unload GPU immediately
+            if OCR_AVAILABLE:
+                try:
+                    ocr_pipeline.abort_active_inference()
+                    ocr_pipeline.stop_ollama()
+                    ocr_pipeline.cleanup_gpu()
+                except Exception:
+                    pass
+
+            # Abort train slides popup if open
+            try:
+                from backend.train_slides_logic import get_analyzer
+                analyzer = get_analyzer()
+                analyzer._should_close_popup = True
+                if getattr(analyzer, "_popup_win", None):
+                    self.after(0, lambda: analyzer._popup_win.destroy() if analyzer._popup_win.winfo_exists() else None)
+                    analyzer._popup_win = None
+            except Exception:
+                pass
+
+            self.after(0, lambda: self._set_action_buttons_state("normal"))
 
     # ── OCR Pipeline Helper ─────────────────────────────────────────────────
     def _process_book_ocr(self, book_id, book_pages, ts):
         """
         Run the full OCR pipeline for one book:
           YOLO crop → MinerU OCR → Ollama AI (title, colors, description)
-        Returns dict with {title, description, colors} or None on failure.
+        Returns dict with {title, description, colors} or None on failure, or {"cancelled": True} if stopped.
         """
         if not OCR_AVAILABLE:
             return None
@@ -4512,6 +4783,22 @@ class SyncApp(ctk.CTk):
         book_output_folder = os.path.join(output_base, book_id)
         os.makedirs(book_output_folder, exist_ok=True)
 
+        def _check_cancelled():
+            if not self.sync_running:
+                self._log(f"  🛑 Aborted processing for {book_id} (Stop requested)")
+                try:
+                    if os.path.exists(book_crops_folder):
+                        ocr_pipeline.cleanup_intermediate_files(book_crops_folder)
+                    if os.path.exists(book_output_folder):
+                        ocr_pipeline.cleanup_intermediate_files(book_output_folder)
+                except Exception:
+                    pass
+                return True
+            return False
+
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # Extract sorted image paths from (page_num, filepath) tuples
         image_paths = [fp for _, fp in sorted(book_pages, key=lambda x: x[0])]
 
@@ -4523,6 +4810,9 @@ class SyncApp(ctk.CTk):
         except Exception as e:
             self._log(f"  ⚠️ GPU flush warning: {e}")
 
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # ── Pre-Phase 0: Fast Cover Hash Match ───────────
         front_cover = next((fp for pn, fp in book_pages if pn == 1), image_paths[0] if image_paths else None)
         if front_cover and os.path.exists(front_cover) and self.db_connector and self.db_connector.connected:
@@ -4530,13 +4820,16 @@ class SyncApp(ctk.CTk):
                 cover_hash = CryptoUtils.compute_file_sha256(front_cover)
                 coll = self.config.get("collection", "Book Data")
                 uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
-                matched_doc = self.db_connector.find_by_cover_hash(coll, cover_hash, user_id=uid)
+                matched_doc = self.db_connector.find_by_cover_hash(coll, cover_hash, user_id=uid, book_id=book_id, update_sync_date=True)
                 if matched_doc:
                     matched_title = matched_doc.get("title", book_id)
-                    self._log(f"  ⚡ Duplicate Cover Matched: '{matched_title}' (Book {book_id}) -> Skipped")
+                    self._log(f"  ⚡ Duplicate Cover Matched: '{matched_title}' (Book {book_id}) -> Skipped (Date Updated)")
                     return {"duplicate": True, "doc": matched_doc}
             except Exception as e:
                 self._log(f"  ⚠️ Fast Cover Hash check warning: {e}")
+
+        if _check_cancelled():
+            return {"cancelled": True}
 
         # ── Phase 0: ISBN First-Pass (New) ─────────────────
         isbn_meta = None
@@ -4544,15 +4837,16 @@ class SyncApp(ctk.CTk):
         isbn_source_page = 3 # Default to copyright page
         
         if ISBN_LOGIC_AVAILABLE:
+            if _check_cancelled():
+                return {"cancelled": True}
             self.after(0, lambda b=book_id, t=ts:
                        self.update_activity_row(b, "Processing", "Searching ISBN…", t))
             self.after(0, self.update_idletasks)
             
             self._log(f"  🔍 Checking for ISBN logic for {book_id}…")
             try:
-                # Use normalized log function for isbn_logic
-                res = isbn_logic.process_book(book_id, image_paths, log_fn=self._log)
-                # Optimization: Do NOT unload here, let ocr_pipeline reuse it.
+                # Use normalized log function for isbn_logic with cancellation support
+                res = isbn_logic.process_book(book_id, image_paths, log_fn=self._log, stop_check=lambda: not self.sync_running)
                 
                 if res:
                     official_isbn = res.get("isbn", "N/A")
@@ -4563,6 +4857,9 @@ class SyncApp(ctk.CTk):
                         self._log(f"  ✅ ISBN Found: {official_isbn} (Page {isbn_source_page})")
             except Exception as e:
                 self._log(f"  ⚠️ ISBN search error: {e}")
+
+        if _check_cancelled():
+            return {"cancelled": True}
 
         # Initialize metadata from ISBN pass if available
         title_str   = (isbn_meta.get("title") if isbn_meta else "") or ""
@@ -4606,12 +4903,24 @@ class SyncApp(ctk.CTk):
         if title_str:
             try:
                 if self.db_connector:
-                    matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True)
+                    uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                    matched_doc = self.db_connector.book_title_exists(
+                        coll, title_str,
+                        new_book_id=book_id,
+                        new_isbn=official_isbn,
+                        new_edition=edition,
+                        new_subtitle=subtitle,
+                        user_id=uid,
+                        return_doc=True
+                    )
                     if matched_doc:
                         self._log(f"  ⏭️  API Title '{title_str}' matches an existing book (90%+). Skipping heavy OCR.")
                         return {"duplicate": True, "doc": matched_doc}
             except Exception as e:
                 self._log(f"  ⚠️ DB title check error (API Title): {e}")
+
+        if _check_cancelled():
+            return {"cancelled": True}
 
         # Optimization: If all fields are already found via ISBN, skip heavy OCR
         all_meta_found = all([title_str, author, edition, description])
@@ -4619,47 +4928,53 @@ class SyncApp(ctk.CTk):
         ocr_data = None
 
         # Decision: Which pages need processing
-        # MEGA OPTIMIZATION: If we have Description via ISBN, we don't need YOLO/OCR at all!
-        # We only need the interior OCR/YOLO for generating the description.
         needs_interior_ocr = (not description)
 
         if needs_interior_ocr:
             # If we only need description, focus on interior pages ONLY (Skip 1 and 2)
             if not description and all([title_str, author, edition]):
                 self._log(f"  🎯 Only Description missing. Processing interior pages only (Skipping covers).")
-                # User rule: Skip 1 and 2 for description OCR
                 images_to_process = [fp for pn, fp in sorted(book_pages, key=lambda x: x[0]) if pn not in (1, 2)]
-                # If no interior (short book), process whatever is left BUT still skip 1/2 if possible
                 if not images_to_process:
                     images_to_process = image_paths 
             else:
                 images_to_process = image_paths
 
+            if _check_cancelled():
+                return {"cancelled": True}
+
             # ── Phase 1: YOLO Crop ────────────────────────
             self.after(0, lambda b=book_id, t=ts:
                        self.update_activity_row(b, "Processing", "Cropping…", t))
             self.after(0, self.update_idletasks)
-            time.sleep(0.2)
+            time.sleep(0.1)
             
             self._log(f"  ✂️  Cropping {book_id} ({len(images_to_process)} pages)…")
             try:
-                pages = ocr_pipeline.crop_book(images_to_process, book_crops_folder)
+                pages = ocr_pipeline.crop_book(images_to_process, book_crops_folder, stop_check=lambda: not self.sync_running)
             except Exception as e:
+                if _check_cancelled(): return {"cancelled": True}
                 raise RuntimeError(f"YOLO Cropping failed: {e}")
             
+            if _check_cancelled():
+                return {"cancelled": True}
+
             if not pages:
+                if _check_cancelled(): return {"cancelled": True}
                 raise RuntimeError("No book content identified by YOLO. Try clearer cover photos.")
             
             self._log(f"  ✅ {len(pages)} page(s) cropped")
 
+            if _check_cancelled():
+                return {"cancelled": True}
+
             # ── Phase 2: MinerU OCR ───────────────────────
-            # Only run MinerU if description or interior text is still needed
             interior_text = ""
             if not description:
                 self.after(0, lambda b=book_id, t=ts:
                            self.update_activity_row(b, "Processing", "OCR…", t))
                 self.after(0, self.update_idletasks)
-                time.sleep(0.2)
+                time.sleep(0.1)
                 
                 self._log(f"  📝 Running OCR on {book_id}…")
                 from types import SimpleNamespace
@@ -4669,25 +4984,31 @@ class SyncApp(ctk.CTk):
 
                 try:
                     ocr_pipeline.stop_ollama()
-                    ocr_data = ocr_pipeline.ocr_book(pages, book_output_folder, ocr_args, total_pages=len(images_to_process))
+                    if _check_cancelled(): return {"cancelled": True}
+                    ocr_data = ocr_pipeline.ocr_book(pages, book_output_folder, ocr_args, total_pages=len(images_to_process), stop_check=lambda: not self.sync_running)
                     
-                    # USER REQUEST: Unload EasyOCR immediately to free VRAM for Phase 3 (Ollama)
                     ocr_pipeline.unload_easyocr()
+                    if _check_cancelled(): return {"cancelled": True}
                     
                     if ocr_data:
                         interior_text = "\n".join(ocr_data.get("interior_texts", []))
                     else:
+                        if _check_cancelled(): return {"cancelled": True}
                         raise RuntimeError("OCR returned empty result (check if EasyOCR models are missing/corrupt).")
                 except Exception as e:
+                    if _check_cancelled(): return {"cancelled": True}
                     raise RuntimeError(f"OCR Phase failed: {e}")
             else:
                 self._log(f"  ⏭️ Skipping MinerU OCR (Description found via ISBN)")
+
+        if _check_cancelled():
+            return {"cancelled": True}
 
         # ── Phase 3: Targeted AI Pipeline (Fill Gaps) ───
         self.after(0, lambda b=book_id, t=ts:
                    self.update_activity_row(b, "Processing", "AI…", t))
         self.after(0, self.update)
-        time.sleep(0.2)
+        time.sleep(0.1)
 
         # Start Ollama for AI models
         try:
@@ -4696,16 +5017,30 @@ class SyncApp(ctk.CTk):
         except Exception as e:
             self._log(f"  ❌ Failed to start Ollama: {e}")
 
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # 1. Title (only if API returned N/A or no ISBN was found)
         if not title_str and api_title_missing:
+            if _check_cancelled(): return {"cancelled": True}
             try:
                 front_cover = next((fp for pn, fp in book_pages if pn == 1), image_paths[0])
                 title_str = ocr_pipeline.extract_title_from_cover_image(front_cover)
+                if _check_cancelled(): return {"cancelled": True}
                 if title_str:
                     try:
                         coll = self.config.get("collection", "Book Data")
                         if self.db_connector:
-                            matched_doc = self.db_connector.book_title_exists(coll, title_str, return_doc=True)
+                            uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                            matched_doc = self.db_connector.book_title_exists(
+                                coll, title_str,
+                                new_book_id=book_id,
+                                new_isbn=official_isbn,
+                                new_edition=edition,
+                                new_subtitle=subtitle,
+                                user_id=uid,
+                                return_doc=True
+                            )
                             if matched_doc:
                                 self._log(f"  ⏭️  Extracted Title '{title_str}' matches an existing book (90%+). Skipping heavy AI.")
                                 return {"duplicate": True, "doc": matched_doc}
@@ -4715,16 +5050,24 @@ class SyncApp(ctk.CTk):
         elif title_str:
             self._log(f"  ✅ Using API title")
 
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # 2. Author (if missing)
         if not author and author != "N/A":
+            if _check_cancelled(): return {"cancelled": True}
             try:
                 front_cover = next((fp for pn, fp in book_pages if pn == 1), image_paths[0])
                 back_cover  = next((fp for pn, fp in book_pages if pn == 2), None)
                 author = ocr_pipeline.extract_author_from_cover(front_cover, back_cover)
             except: pass
 
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # 3. Edition (only if API returned N/A or no ISBN was found)
         if not edition and api_edition_missing:
+            if _check_cancelled(): return {"cancelled": True}
             try:
                 # USER REQUEST: Prioritized search. isbn_source_page first, then others. Stop if found.
                 priority_pages = []
@@ -4743,24 +5086,25 @@ class SyncApp(ctk.CTk):
                         target_images.append(img)
                 
                 if target_images:
+                    if _check_cancelled(): return {"cancelled": True}
                     self._log(f"  🧠 Vision LLM checking {len(target_images)} priority pages for edition…")
                     # extract_edition_from_cover iterates through images and returns as soon as validated
                     edition = ocr_pipeline.extract_edition_from_cover(target_images, isbn=official_isbn)
                 
-                if not edition:
+                if not edition and not _check_cancelled():
                     # FAST FALLBACK: Use Regex on accumulated OCR text before AI
                     combined_text = "\n".join(ocr_data.get("interior_texts", [])) + "\n" + "\n".join(isbn_ocr_texts)
                     edition = ocr_pipeline.find_edition_via_regex(combined_text)
                     if edition:
                         self._log(f"  ⚡ Fast-Match Edition: {edition}")
                 
-                if not edition:
+                if not edition and not _check_cancelled():
                     # FALLBACK 1: Use the already-extracted OCR text from MinerU
                     if interior_text.strip():
                         self._log("  🔍 Vision failed → trying text-based edition search (interior text)…")
                         edition = ocr_pipeline.extract_edition_from_text(interior_text, title_str, isbn=official_isbn)
                 
-                if not edition and isbn_ocr_texts:
+                if not edition and isbn_ocr_texts and not _check_cancelled():
                     # FALLBACK 2: Use the ISBN OCR text (copyright page text captured during ISBN phase)
                     combined_isbn_text = "\n".join(isbn_ocr_texts)
                     self._log("  🔍 Trying text-based edition search (ISBN page text)…")
@@ -4773,8 +5117,12 @@ class SyncApp(ctk.CTk):
         elif edition:
             self._log(f"  ✅ Using API edition (skipping AI generation)")
 
+        if _check_cancelled():
+            return {"cancelled": True}
+
         # 4. Description (only if API returned N/A or no ISBN was found)
         if not description and api_description_missing:
+            if _check_cancelled(): return {"cancelled": True}
             try:
                 if interior_text.strip():
                     description = ocr_pipeline.generate_description(interior_text, title_str)
@@ -4783,6 +5131,10 @@ class SyncApp(ctk.CTk):
             except: pass
         elif description:
             self._log(f"  ✅ Using API description (skipping AI generation)")
+
+        if _check_cancelled():
+            return {"cancelled": True}
+
         try:
             ocr_pipeline.save_book_metadata(
                 book_id, title_str, description,
@@ -4851,6 +5203,7 @@ class SyncApp(ctk.CTk):
                     for book_id in sorted_ids:
                         if not self.sync_running:
                             break
+                        self._current_processing_book = book_id
 
                         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
@@ -4881,17 +5234,21 @@ class SyncApp(ctk.CTk):
                         if cover_hash and self.db_connector and self.db_connector.connected:
                             try:
                                 uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
-                                matched_doc = self.db_connector.find_by_cover_hash(coll, cover_hash, user_id=uid)
+                                matched_doc = self.db_connector.find_by_cover_hash(coll, cover_hash, user_id=uid, book_id=book_id, update_sync_date=True)
                                 if matched_doc:
                                     matched_title = matched_doc.get("title", book_id)
-                                    self._log(f"  ⚡ Duplicate Cover Matched: '{matched_title}' (Book {book_id}) -> Skipped")
-                                    self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc}
+                                    self._log(f"  ⚡ Duplicate Cover Matched: '{matched_title}' (Book {book_id}) -> Skipped (Date Updated)")
+                                    mongo_id = str(matched_doc.get("_id")) if "_id" in matched_doc else None
+                                    if mongo_id:
+                                        self.book_mongo_ids[book_id] = mongo_id
+                                    self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc, "mongo_id": mongo_id}
                                     self.total_skip += 1
                                     synced.add(book_id)
-                                    self.after(0, lambda b=book_id, t=ts:
-                                               self.update_activity_row(b, "Skipped", "Hash Match", t))
+                                    self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                               self.update_activity_row(b, "Skipped", "Hash Match", t, mongo_id=mid))
                                     self.after(0, self.update_idletasks)
                                     time.sleep(0.15)
+                                    self._current_processing_book = None
                                     continue
                             except Exception as e:
                                 self._log(f"  ⚠️ Fast Cover Hash check warning in worker: {e}")
@@ -4903,16 +5260,28 @@ class SyncApp(ctk.CTk):
                             try:
                                 ai_result = self._process_book_ocr(
                                     book_id, books[book_id], ts)
+                                if not self.sync_running or (ai_result and ai_result.get("cancelled")):
+                                    self._log(f"  🛑 Aborted processing for {book_id}. Skipping database upload.")
+                                    self.after(0, lambda b=book_id, t=ts:
+                                               self.update_activity_row(b, "Stopped", "Stopped", t, error_msg="Stopped by user"))
+                                    self._current_processing_book = None
+                                    break
+
                                 if ai_result:
                                     if ai_result.get("duplicate"):
-                                        if "doc" in ai_result:
-                                            self.last_sync_results[book_id] = {"files": books[book_id], "doc": ai_result["doc"]}
+                                        matched_doc = ai_result.get("doc")
+                                        mongo_id = str(matched_doc.get("_id")) if (matched_doc and "_id" in matched_doc) else None
+                                        if mongo_id:
+                                            self.book_mongo_ids[book_id] = mongo_id
+                                        if matched_doc:
+                                            self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc, "mongo_id": mongo_id}
                                         self.total_skip += 1
                                         synced.add(book_id)
-                                        self.after(0, lambda b=book_id, t=ts:
-                                                   self.update_activity_row(b, "Skipped", "Book", t))
+                                        self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                                   self.update_activity_row(b, "Skipped", "Book", t, mongo_id=mid))
                                         self.after(0, self.update_idletasks)
                                         time.sleep(0.15)
+                                        self._current_processing_book = None
                                         continue
                                         
                                     extracted_title = ai_result.get("title", "")
@@ -4920,16 +5289,33 @@ class SyncApp(ctk.CTk):
                                     # Check DB based on extracted title
                                     try:
                                         if extracted_title and self.db_connector:
-                                            matched_doc = self.db_connector.book_title_exists(coll, extracted_title, return_doc=True)
+                                            uid = self.current_user.get("id") if getattr(self, "current_user", None) else None
+                                            matched_doc = self.db_connector.book_title_exists(
+                                                coll, extracted_title,
+                                                new_book_id=book_id,
+                                                new_isbn=ai_result.get("isbn") if ai_result else None,
+                                                new_edition=ai_result.get("edition") if ai_result else None,
+                                                new_subtitle=ai_result.get("subtitle") if ai_result else None,
+                                                user_id=uid,
+                                                return_doc=True
+                                            )
                                             if matched_doc:
-                                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping.")
-                                                self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc}
+                                                self._log(f"  ⏭️  Title '{extracted_title}' matches an existing book (90%+). Skipping (Date Updated).")
+                                                try:
+                                                    self.db_connector.update_book_sync_date(coll, matched_doc, force=True)
+                                                except Exception:
+                                                    pass
+                                                mongo_id = str(matched_doc.get("_id")) if "_id" in matched_doc else None
+                                                if mongo_id:
+                                                    self.book_mongo_ids[book_id] = mongo_id
+                                                self.last_sync_results[book_id] = {"files": books[book_id], "doc": matched_doc, "mongo_id": mongo_id}
                                                 self.total_skip += 1
                                                 synced.add(book_id)
-                                                self.after(0, lambda b=book_id, t=ts:
-                                                           self.update_activity_row(b, "Skipped", "Book", t))
+                                                self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                                           self.update_activity_row(b, "Skipped", "Book", t, mongo_id=mid))
                                                 self.after(0, self.update_idletasks)
                                                 time.sleep(0.15)
+                                                self._current_processing_book = None
                                                 continue
                                     except Exception as e:
                                         self._log(f"  ⚠️ DB title check error: {e}")
@@ -4947,6 +5333,9 @@ class SyncApp(ctk.CTk):
                                     last_error = "OCR/AI process failed to extract metadata. Check app logs."
                                     self._log(f"  ⚠️ OCR returned no results for {book_id}")
                             except Exception as e:
+                                if not self.sync_running:
+                                    self._current_processing_book = None
+                                    break
                                 doc["ocr_completed"] = False
                                 last_error = str(e)
                                 self._log(f"  ⚠️ OCR pipeline error: {e}")
@@ -4956,12 +5345,22 @@ class SyncApp(ctk.CTk):
                             self.after(0, lambda b=book_id, t=ts:
                                        self.update_activity_row(b, "Failed", "No Models", t))
                             self.after(0, self.update_idletasks)
+                            self._current_processing_book = None
                             continue
+
+                        if not self.sync_running:
+                            self._current_processing_book = None
+                            break
 
                         # ── Insert to DB ──────────────────────────────────
                         if ai_result:
                             try:
-                                self.db_connector.insert_book(coll, doc)
+                                inserted_id = self.db_connector.insert_book(coll, doc)
+                                mongo_id = str(inserted_id) if inserted_id else None
+                                if mongo_id:
+                                    doc["_id"] = inserted_id
+                                    self.book_mongo_ids[book_id] = mongo_id
+                                self.last_sync_results[book_id] = {"files": books[book_id], "doc": doc, "mongo_id": mongo_id}
                                 self.total_ok += 1
                                 synced.add(book_id)
                                 self._log(f"  ✅ Synced: {book_id}")
@@ -4974,13 +5373,14 @@ class SyncApp(ctk.CTk):
                                 except Exception as e:
                                     self._log(f"  ⚠️ Result cleanup failed: {e}")
                                 
-                                self.after(0, lambda b=book_id, t=ts:
-                                           self.update_activity_row(b, "Complete", "Book", t))
+                                self.after(0, lambda b=book_id, t=ts, mid=mongo_id:
+                                           self.update_activity_row(b, "Complete", "Book", t, mongo_id=mid))
                             except Exception as e:
                                 self._log(f"  ❌ DB Error: {e}")
                                 self.total_fail += 1
                                 self.after(0, lambda b=book_id, t=ts, err=str(e):
                                            self.update_activity_row(b, "Failed", "DB Error", t, error_msg=err))
+                                self._current_processing_book = None
                                 continue
                         else:
                             # If we reached here without ai_result, skip sync
@@ -4988,8 +5388,10 @@ class SyncApp(ctk.CTk):
                             self.total_fail += 1
                             self.after(0, lambda b=book_id, t=ts, err=last_error:
                                        self.update_activity_row(b, "Failed", "No Metadata", t, error_msg=err))
+                            self._current_processing_book = None
                             continue
 
+                        self._current_processing_book = None
                         self.after(0, self.update_idletasks)
                         time.sleep(0.15)
 
@@ -5003,9 +5405,11 @@ class SyncApp(ctk.CTk):
 
         finally:
             self.sync_running = False
+            self._current_processing_book = None
             if OCR_AVAILABLE:
                 ocr_pipeline.cleanup_gpu()
             self.after(0, lambda: self.btn_stop.configure(state="disabled"))
+            self.after(0, lambda: self._set_action_buttons_state("normal"))
             self.after(0, lambda: self._set_conn_visual("active")) # Reset status
             self._log("🏁 Sync finished.")
 

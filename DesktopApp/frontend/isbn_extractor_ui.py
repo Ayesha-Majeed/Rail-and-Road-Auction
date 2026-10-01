@@ -485,11 +485,15 @@ def fetch_metadata_local_ai(image_path: str, accumulated_text: str = "", log_fn=
 
 # ─── CORE PIPELINE ───────────────────────────────────────────────────────────
 
-def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
+def process_book(book_id: str, files: list[str], log_fn=print, stop_check=None) -> dict:
     """
     Main entry point for processing a single book.
     Returns a result dictionary.
     """
+    if stop_check and stop_check():
+        log_fn("  🛑 ISBN search aborted by stop request")
+        return None
+
     log_fn("-" * 60)
     log_fn(f"📚 PROCESSING BOOK: {book_id}")
     
@@ -510,6 +514,10 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
     collected_ocr_texts = []  # Collect all OCR text for later reuse (e.g., edition detection)
 
     # Step 1: Scan Page 4
+    if stop_check and stop_check():
+        log_fn("  🛑 ISBN search aborted by stop request")
+        return None
+
     if 4 in file_map:
         log_fn(f"  🔍 Checking Page 4: {Path(file_map[4]).name}")
         res4, ocr4 = extract_isbn_from_image(file_map[4], log_fn)
@@ -518,6 +526,9 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
             log_fn(f"  ✅ Found on Page 4: {res4[0]}")
             # Cross-verify with Page 2
             if 2 in file_map:
+                if stop_check and stop_check():
+                    log_fn("  🛑 ISBN search aborted by stop request")
+                    return None
                 log_fn(f"  🛡️ Verifying with Page 2...")
                 res2, ocr2 = extract_isbn_from_image(file_map[2], log_fn, is_cover=True)
                 if ocr2: collected_ocr_texts.append(ocr2)
@@ -537,6 +548,9 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
     if not official_isbn:
         log_fn("  🔍 Triggering fallback sequence (3, 2, 1)...")
         for pn in [3, 2, 1]:
+            if stop_check and stop_check():
+                log_fn("  🛑 ISBN search aborted by stop request")
+                return None
             if pn in file_map:
                 log_fn(f"  🔍 Checking Page {pn}...")
                 res, ocr_txt = extract_isbn_from_image(file_map[pn], log_fn, is_cover=(pn==2))
@@ -548,6 +562,10 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
                     break
 
     # Final Stage: Metadata
+    if stop_check and stop_check():
+        log_fn("  🛑 ISBN search aborted by stop request")
+        return None
+
     result = {
         "book_id": book_id, 
         "isbn": official_isbn or "N/A", 
@@ -557,12 +575,16 @@ def process_book(book_id: str, files: list[str], log_fn=print) -> dict:
     }
     
     if official_isbn:
+        if stop_check and stop_check():
+            return None
         meta_api = fetch_metadata_google(official_isbn, log_fn)
         
         all_text = "\n".join(collected_ocr_texts)
         fallback_img = file_map.get(1, file_map.get(source_page, files[0]))
         
         if meta_api:
+            if stop_check and stop_check():
+                return None
             log_fn("  🛡️ Verifying API Title with VLM AI Fallback...")
             meta_ai = fetch_metadata_local_ai(fallback_img, all_text, log_fn)
             
