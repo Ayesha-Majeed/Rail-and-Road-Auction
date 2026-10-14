@@ -227,6 +227,42 @@ For full install steps, the offline Grounding DINO cache, and troubleshooting, s
 
 ---
 
+## Trained railroad classes
+
+The DINOv2 railroad classifier (`phase5_best.pth`) was fine-tuned on **50 railroad classes**. These are the 50 classes with the most original (non-augmented) images in the training split. Together they cover about 15,000 training images.
+
+| # | Class | # | Class |
+|---|---|---|---|
+| 1 | Alton Railroad | 26 | Erie Lackawanna Railway |
+| 2 | Amtrak - National Railroad Passenger Corporation | 27 | Florida East Coast Railway |
+| 3 | Atchison, Topeka & Santa Fe Railway | 28 | Grand Trunk Western Railroad |
+| 4 | Baltimore & Ohio Railroad | 29 | Great Northern Railway |
+| 5 | Baltimore Transit Company | 30 | Illinois Central Railroad |
+| 6 | BNSF Railway | 31 | Illinois Terminal Railroad |
+| 7 | Boston & Maine Railroad | 32 | Kansas City Southern Railway |
+| 8 | Burlington Northern Railroad | 33 | Louisville & Nashville Railroad |
+| 9 | Burlington Northern Santa Fe | 34 | Milwaukee Road - Chicago, Milwaukee, St. Paul & Pacific Railroad |
+| 10 | Canadian National Railway | 35 | Missouri Pacific Railroad |
+| 11 | Canadian Pacific Railway | 36 | Missouri-Kansas-Texas Railroad |
+| 12 | Chesapeake & Ohio Railway | 37 | New York Central Railroad |
+| 13 | Chicago & North Western Railway | 38 | Norfolk & Western Railway |
+| 14 | Chicago North Shore & Milwaukee Railroad | 39 | Norfolk Southern Railway |
+| 15 | Chicago South Shore & South Bend Railroad | 40 | Pacific Electric Railway |
+| 16 | Chicago Transit Authority | 41 | Philadelphia Transportation Company |
+| 17 | Chicago, Burlington & Quincy Railroad | 42 | Rio Grande |
+| 18 | Chicago, Indianapolis & Louisville - Monon | 43 | Seaboard Coast Line Railroad |
+| 19 | Chicago, Milwaukee, St. Paul & Pacific Railroad | 44 | Seaboard System Railroad |
+| 20 | Chicago, Rock Island & Pacific Railroad | 45 | Soo Line Railroad |
+| 21 | Conrail - Consolidated Rail Corporation | 46 | Southern Pacific Transportation Company |
+| 22 | CSX Transportation | 47 | Southern Railway |
+| 23 | Dallas Area Rapid Transit | 48 | St. Louis-San Francisco Railway |
+| 24 | Denver & Rio Grande Railway | 49 | Toronto Transit Commission |
+| 25 | Southern Pacific Transportation Company | 50 | Union Pacific Railroad |
+
+At runtime, matching uses the reference embeddings in `val_embeddings.pt`, which cover **138 railroad classes**: the 50 trained classes plus others added through embeddings. A new class can be added from the app without retraining (see below).
+
+---
+
 ## Training & adding railroad classes
 
 - **Add a class without retraining:** in the app, use *Add a new slide class in model*, upload images, then click *Generate Embeddings*. This updates `models/val_embeddings.pt`.
