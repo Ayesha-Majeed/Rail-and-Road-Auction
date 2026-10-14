@@ -19,7 +19,7 @@ All heavy inference (OCR, object detection, vision/text LLMs) runs on the local 
 A 5-step pipeline runs for each slide:
 1. YOLO detects and crops the locomotive.
 2. Grounding DINO finds the emblem/logo region.
-3. A fine-tuned DINOv2 dual-stream model matches the railroad against stored class embeddings. A vision LLM (`minicpm-v`) then verifies the top 5 candidates by reading text on the train.
+3. A fine-tuned DINOv2 dual-stream model matches the railroad against stored class embeddings.
 4. YOLO detects the train's parts.
 5. The locomotive type is classified.
 
