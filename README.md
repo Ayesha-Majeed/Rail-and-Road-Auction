@@ -276,7 +276,6 @@ At runtime, matching uses the reference embeddings in `val_embeddings.pt`, which
 | Problem | Fix |
 |---|---|
 | App hangs on title/description step | Make sure Ollama is running and both models are pulled |
-| `CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH` | Launch with `run.sh` (Linux) |
 | CUDA out of memory | Close other GPU apps; the app unloads models between stages, but 8 GB+ VRAM is recommended |
 | "DocLayout YOLO missing" | Put the `.pt` file in the app root, not `models/` |
 | Grounding DINO fails offline | See *Offline Grounding DINO Setup* in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) |
